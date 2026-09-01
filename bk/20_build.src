@@ -1,0 +1,243 @@
+// ── the build ────────────────────────────────────────────────────────────
+// A robot is a list of bricks with grid coordinates. That is the whole model,
+// and it is deliberately the same shape as this family's maps and characters:
+// a text file of inputs, small enough to read, diffable, and the only thing
+// ever saved. Nothing about how it moves or fights is stored — all of that is
+// worked out from these coordinates every time it is loaded.
+
+type Brick struct {
+    x    int
+    y    int
+    z    int
+    kind int
+    hp   float
+    // filled in by the derivation, not by the builder
+    limb int         // which limb this brick belongs to, -1 for the hull
+    live int
+}
+
+type Bot struct {
+    b    []Brick
+    n    int
+    name string
+}
+
+func bot_new() (bt) {
+    bt = Bot{}
+    bt.b = []Brick{}
+    bt.n = 0
+    bt.name = "unnamed"
+}
+
+func in_grid(x, y, z) (o) {
+    o = 0
+    if x >= 0 { if y >= 0 { if z >= 0 {
+        if x < GX() { if y < GY() { if z < GZ() { o = 1 } } }
+    } } }
+}
+
+func bot_at(bt, x, y, z) (i) {
+    i = 0 - 1
+    k := 0
+    while k < bt.n {
+        if bt.b[k].live == 1 {
+            if bt.b[k].x == x { if bt.b[k].y == y { if bt.b[k].z == z { i = k } } }
+        }
+        k = k + 1
+    }
+}
+
+func bot_add(bt0, x, y, z, kind) (bt) {
+    bt = bt0
+    if in_grid(x, y, z) == 0 { return }
+    if bot_at(bt, x, y, z) >= 0 { return }
+    // ONE CORE. It is the root of everything derived and the thing you lose by
+    // losing, so a second one is not a build, it is a bug.
+    if kind == P_CORE() { if bot_count(bt, P_CORE()) > 0 { return } }
+    br := Brick{}
+    br.x = x
+    br.y = y
+    br.z = z
+    br.kind = kind
+    br.hp = part_hp(kind)
+    br.limb = 0 - 1
+    br.live = 1
+    bt.b = append(bt.b, br)
+    bt.n = bt.n + 1
+}
+
+func bot_del(bt0, x, y, z) (bt) {
+    bt = bt0
+    i := bot_at(bt, x, y, z)
+    if i >= 0 { bt.b[i].live = 0 }
+}
+
+func bot_count(bt, kind) (n) {
+    n = 0
+    k := 0
+    while k < bt.n {
+        if bt.b[k].live == 1 { if bt.b[k].kind == kind { n = n + 1 } }
+        k = k + 1
+    }
+}
+
+func bot_alive(bt) (n) {
+    n = 0
+    k := 0
+    while k < bt.n {
+        if bt.b[k].live == 1 { n = n + 1 }
+        k = k + 1
+    }
+}
+
+// ── MIRRORING ────────────────────────────────────────────────────────────
+// Build one leg, get two. It is not a convenience, it is most of why building
+// is pleasant: a robot is symmetric about its own centre line and typing the
+// second half by hand is the part nobody enjoys. The mirror axis is the middle
+// of the grid in x.
+func mirror_x(x) (o) { o = GX() - 1 - x }
+
+func bot_mirror(bt0, x, y, z, kind) (bt) {
+    bt = bot_add(bt0, x, y, z, kind)
+    mx := mirror_x(x)
+    if mx != x {
+        // ...except the core, which is one thing and belongs on the line
+        if kind != P_CORE() { bt = bot_add(bt, mx, y, z, kind) }
+    }
+}
+
+func bot_del_mirror(bt0, x, y, z) (bt) {
+    bt = bot_del(bt0, x, y, z)
+    mx := mirror_x(x)
+    if mx != x { bt = bot_del(bt, mx, y, z) }
+}
+
+// ── CONNECTIVITY ─────────────────────────────────────────────────────────
+// A flood fill from the core over face-adjacency. Everything it does not reach
+// is not part of the robot — at build time that is an invalid build, and in a
+// fight it is an arm that has just been shot off, which is the same operation
+// and is why it lives here rather than in either.
+func nbr_of(k) (dx, dy, dz) {
+    dx = 0
+    dy = 0
+    dz = 0
+    if k == 0 { dx = 1 }
+    if k == 1 { dx = 0 - 1 }
+    if k == 2 { dy = 1 }
+    if k == 3 { dy = 0 - 1 }
+    if k == 4 { dz = 1 }
+    if k == 5 { dz = 0 - 1 }
+}
+
+func bot_connected(bt) (seen) {
+    seen = []int{}
+    i := 0
+    while i < bt.n {
+        seen = append(seen, 0)
+        i = i + 1
+    }
+    root := 0 - 1
+    i = 0
+    while i < bt.n {
+        if bt.b[i].live == 1 { if bt.b[i].kind == P_CORE() { if root < 0 { root = i } } }
+        i = i + 1
+    }
+    if root < 0 { return }
+    q := []int{}
+    q = append(q, root)
+    seen[root] = 1
+    head := 0
+    while head < len(q) {
+        c := q[head]
+        head = head + 1
+        k := 0
+        while k < 6 {
+            dx, dy, dz := nbr_of(k)
+            j := bot_at(bt, bt.b[c].x + dx, bt.b[c].y + dy, bt.b[c].z + dz)
+            if j >= 0 { if seen[j] == 0 {
+                seen[j] = 1
+                q = append(q, j)
+            } }
+            k = k + 1
+        }
+    }
+}
+
+// ...and the operation that follows from it: anything no longer attached to
+// the core falls off. Shoot the shoulder and the whole arm goes, gun included.
+func bot_shed(bt0) (bt, lost) {
+    bt = bt0
+    lost = 0
+    seen := bot_connected(bt)
+    i := 0
+    while i < bt.n {
+        if bt.b[i].live == 1 { if seen[i] == 0 {
+            bt.b[i].live = 0
+            lost = lost + 1
+        } }
+        i = i + 1
+    }
+}
+
+// ── is this a robot? ─────────────────────────────────────────────────────
+// The build rules, in one place, phrased as what is wrong rather than what is
+// missing, because the editor shows the message.
+func bot_fault(bt) (msg) {
+    msg = ""
+    if bot_count(bt, P_CORE()) == 0 { msg = "no core"  return }
+    if bot_alive(bt) < 4 { msg = "too few bricks"  return }
+    seen := bot_connected(bt)
+    i := 0
+    while i < bt.n {
+        if bt.b[i].live == 1 { if seen[i] == 0 { msg = "some bricks are not attached"  return } }
+        i = i + 1
+    }
+    if bot_count(bt, P_MOTOR()) == 0 { msg = "no motor: it cannot move"  return }
+    if bot_count(bt, P_BATT()) == 0 { msg = "no battery: it cannot fire"  return }
+    nw := 0
+    i = 0
+    while i < bt.n {
+        if bt.b[i].live == 1 { if is_weapon(bt.b[i].kind) == 1 { nw = nw + 1 } }
+        i = i + 1
+    }
+    if nw == 0 { msg = "no weapon"  return }
+}
+
+// ── the file ─────────────────────────────────────────────────────────────
+func bot_write(path, bt) {
+    o := "# machin-brick robot\n"
+    o = o + "# One line a brick: grid x y z, and what it is. Nothing about how\n"
+    o = o + "# it walks or fights is here — all of that is worked out from\n"
+    o = o + "# these coordinates every time it is loaded.\n"
+    o = o + "name " + bt.name + "\n"
+    i := 0
+    while i < bt.n {
+        if bt.b[i].live == 1 {
+            o = o + "b " + str(bt.b[i].x) + " " + str(bt.b[i].y) + " "
+                  + str(bt.b[i].z) + " " + str(bt.b[i].kind) + "\n"
+        }
+        i = i + 1
+    }
+    write_file(path, o)
+}
+
+func bot_read(path) (bt, ok) {
+    bt = bot_new()
+    ok = 0
+    txt := read_file(path)
+    if len(txt) < 4 { return }
+    ls := split(txt, "\n")
+    i := 0
+    while i < len(ls) {
+        f := split(ls[i], " ")
+        if len(f) >= 2 { if f[0] != "#" {
+            if f[0] == "name" { bt.name = f[1] }
+            if f[0] == "b" { if len(f) >= 5 {
+                bt = bot_add(bt, parse_int(f[1]), parse_int(f[2]),
+                             parse_int(f[3]), parse_int(f[4]))
+            } }
+        } }
+        i = i + 1
+    }
+    ok = 1
+}

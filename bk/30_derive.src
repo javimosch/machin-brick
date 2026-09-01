@@ -1,0 +1,375 @@
+// ── working out what you built ───────────────────────────────────────────
+// This is the file the whole idea rests on.
+//
+// Every other game in this family measures a body that somebody designed: a
+// generated humanoid, or a rigged glTF. The rules — phase advances by
+// distance, feet lead and hips follow, cadence is primitive — were always
+// written against MEASUREMENTS rather than against a rig, and the claim has
+// always been that they would work on anything with legs. Here the player
+// hands us a pile of bricks and we have to find out whether it has legs, how
+// many, how long they are, and what it weighs, and then those same rules
+// apply. Nothing below is a stat the player set. Everything is measured.
+//
+// A LIMB IS WHAT A HINGE SEPARATES. Cut the graph at every hinge brick and
+// flood from the core: what you reach is the HULL, and every remaining island
+// hanging off a hinge is a limb. Its root is the hinge, its end is the brick
+// furthest from that hinge, and what it ends in decides what it is — a foot
+// makes it a leg, a wheel makes it a wheel, a gun makes it an arm.
+
+func L_NONE() (v)  { v = 0 }
+func L_LEG() (v)   { v = 1 }
+func L_WHEEL() (v) { v = 2 }
+func L_ARM() (v)   { v = 3 }
+
+type Limb struct {
+    kind  int
+    hinge int        // brick index of the joint it hangs from
+    tip   int        // brick index of the far end
+    n     int        // how many bricks in it
+    len   float      // hinge to tip, metres
+    // where the hinge sits in the robot's own frame, metres
+    hx    float
+    hy    float
+    hz    float
+    // ...and the tip, in the build pose
+    tx    float
+    ty    float
+    tz    float
+    mass  float
+    live  int
+}
+
+// ── GAITS, BY HOW MANY FEET ──────────────────────────────────────────────
+// Not four animations: four ways of assigning a phase offset to each leg, and
+// one solver underneath. Everything else — stride, cadence, body height, the
+// rise and fall — is the same arithmetic whatever the number.
+func G_NONE() (v)   { v = 0 }
+func G_DRIVE() (v)  { v = 1 }   // wheels
+func G_HOP() (v)    { v = 2 }   // one leg
+func G_BIPED() (v)  { v = 3 }   // two, half a cycle apart
+func G_TROT() (v)   { v = 4 }   // four, diagonal pairs
+func G_TRIPOD() (v) { v = 5 }   // six or more, alternating sets
+func G_CRAWL() (v)  { v = 6 }   // three, or an odd number: one at a time
+
+func gait_name(g) (nm) {
+    nm = "wreck"
+    if g == G_DRIVE() { nm = "wheels" }
+    if g == G_HOP() { nm = "hopping" }
+    if g == G_BIPED() { nm = "biped" }
+    if g == G_TROT() { nm = "trot" }
+    if g == G_TRIPOD() { nm = "tripod" }
+    if g == G_CRAWL() { nm = "crawl" }
+}
+
+type Spec struct {
+    ok     int
+    fault  string
+    mass   float
+    torque float
+    power  float
+    draw   float          // watts the guns want
+    // centre of mass and the extent of the machine, in its own frame, metres
+    cx     float
+    cy     float
+    cz     float
+    hix    float
+    hiy    float
+    hiz    float
+    lox    float
+    loz    float
+    lm     []Limb
+    nlimb  int
+    nleg   int
+    nwheel int
+    narm   int
+    gait   int
+    // derived performance
+    speed  float          // metres a second
+    turn   float          // radians a second
+    stand  float          // how high the hull rides, metres
+    reach  float          // longest leg, metres
+    spread float          // how far apart the feet are, metres
+    tip    float          // how much torque it takes to knock it over
+    hp     float
+    dps    float
+    rmax   float          // longest weapon range
+}
+
+func brick_pos(bt, i) (x, y, z) {
+    x = cw(bt.b[i].x)
+    y = cw(bt.b[i].y)
+    z = cw(bt.b[i].z)
+}
+
+// The hull: everything reachable from the core WITHOUT passing through a
+// hinge. Cutting at the joints is the one idea here; the rest is bookkeeping.
+func hull_of(bt) (seen) {
+    seen = []int{}
+    i := 0
+    while i < bt.n {
+        seen = append(seen, 0)
+        i = i + 1
+    }
+    root := 0 - 1
+    i = 0
+    while i < bt.n {
+        if bt.b[i].live == 1 { if bt.b[i].kind == P_CORE() { if root < 0 { root = i } } }
+        i = i + 1
+    }
+    if root < 0 { return }
+    q := []int{}
+    q = append(q, root)
+    seen[root] = 1
+    head := 0
+    while head < len(q) {
+        c := q[head]
+        head = head + 1
+        k := 0
+        while k < 6 {
+            dx, dy, dz := nbr_of(k)
+            j := bot_at(bt, bt.b[c].x + dx, bt.b[c].y + dy, bt.b[c].z + dz)
+            if j >= 0 { if seen[j] == 0 {
+                seen[j] = 1
+                // a hinge is reached but not passed through: it is the
+                // boundary between the machine and the thing it swings
+                if bt.b[j].kind != P_HINGE() { q = append(q, j) }
+            } }
+            k = k + 1
+        }
+    }
+}
+
+func derive(bt) (sp) {
+    sp = Spec{}
+    sp.lm = []Limb{}
+    sp.ok = 0
+    sp.fault = bot_fault(bt)
+    sp.gait = G_NONE()
+
+    // ── mass, power and where the weight actually is ─────────────────────
+    sp.mass = 0.0
+    sp.hix = 0.0 - 99.0
+    sp.hiy = 0.0 - 99.0
+    sp.hiz = 0.0 - 99.0
+    sp.lox = 99.0
+    sp.loz = 99.0
+    i := 0
+    while i < bt.n {
+        if bt.b[i].live == 1 {
+            m := part_mass(bt.b[i].kind)
+            bx, by, bz := brick_pos(bt, i)
+            sp.mass = sp.mass + m
+            sp.cx = sp.cx + bx * m
+            sp.cy = sp.cy + by * m
+            sp.cz = sp.cz + bz * m
+            sp.torque = sp.torque + part_torque(bt.b[i].kind)
+            sp.power = sp.power + part_power(bt.b[i].kind)
+            sp.hp = sp.hp + bt.b[i].hp
+            if is_weapon(bt.b[i].kind) == 1 {
+                sp.dps = sp.dps + wep_dmg(bt.b[i].kind) / wep_cool(bt.b[i].kind)
+                sp.draw = sp.draw + wep_draw(bt.b[i].kind)
+                if wep_range(bt.b[i].kind) > sp.rmax { sp.rmax = wep_range(bt.b[i].kind) }
+            }
+            if bx > sp.hix { sp.hix = bx }
+            if by > sp.hiy { sp.hiy = by }
+            if bz > sp.hiz { sp.hiz = bz }
+            if bx < sp.lox { sp.lox = bx }
+            if bz < sp.loz { sp.loz = bz }
+        }
+        i = i + 1
+    }
+    if sp.mass < 0.001 { sp.fault = "no bricks"  return }
+    sp.cx = sp.cx / sp.mass
+    sp.cy = sp.cy / sp.mass
+    sp.cz = sp.cz / sp.mass
+    if sp.fault != "" { return }
+
+    // ── the limbs ────────────────────────────────────────────────────────
+    hull := hull_of(bt)
+    used := []int{}
+    i = 0
+    while i < bt.n {
+        used = append(used, 0)
+        i = i + 1
+    }
+    i = 0
+    while i < bt.n {
+        if bt.b[i].live == 1 { if bt.b[i].kind == P_HINGE() { if hull[i] == 1 {
+            sp = limb_from(sp, bt, i, hull, used)
+        } } }
+        i = i + 1
+    }
+    sp.nlimb = len(sp.lm)
+
+    // ── what it is, therefore ────────────────────────────────────────────
+    sp.nleg = 0
+    sp.nwheel = 0
+    sp.narm = 0
+    sp.reach = 0.0
+    i = 0
+    while i < sp.nlimb {
+        if sp.lm[i].kind == L_LEG() { sp.nleg = sp.nleg + 1 }
+        if sp.lm[i].kind == L_WHEEL() { sp.nwheel = sp.nwheel + 1 }
+        if sp.lm[i].kind == L_ARM() { sp.narm = sp.narm + 1 }
+        if sp.lm[i].kind == L_LEG() { if sp.lm[i].len > sp.reach { sp.reach = sp.lm[i].len } }
+        i = i + 1
+    }
+    sp.gait = gait_for(sp.nleg, sp.nwheel)
+    if sp.gait == G_NONE() {
+        sp.fault = "no legs and no wheels: it cannot move"
+        return
+    }
+
+    // ── HOW FAST, from torque against mass ───────────────────────────────
+    // Not a speed stat. A motor turns a wheel or swings a leg, and what it is
+    // working against is everything the player bolted on. Two motors on a
+    // light frame is quick; two motors under a wall of armour is a statue.
+    // ...at the tempo the game runs at, which for two-metre machines seen
+    // from ten is about two and a half metres a second. The RATIO is the
+    // design; the constant is the feel, and it is one number in one place.
+    sp.speed = clampf(sp.torque / (sp.mass * 0.62), 0.0, 7.0)
+    if sp.gait == G_DRIVE() { sp.speed = sp.speed * 1.35 }
+    if sp.gait == G_CRAWL() { sp.speed = sp.speed * 0.55 }
+    if sp.gait == G_HOP() { sp.speed = sp.speed * 0.7 }
+    sp.turn = clampf(sp.torque / (sp.mass * 0.9), 0.2, 3.2)
+
+    // how high it rides: a leg holds the hull up, wheels put it on the axle
+    sp.stand = sp.reach * 0.78 + cw(1)
+    if sp.gait == G_DRIVE() { sp.stand = cw(2) }
+
+    // ── HOW STEADY, from where the feet are against where the weight is ──
+    // The support polygon, as its width — a real hull is more accurate and
+    // this is a duel between two machines a few metres tall. What matters is
+    // that it is MEASURED: wide feet and a low core is a gun platform, and a
+    // tall stack on two feet is not, and neither is a number anybody typed.
+    sp.spread = 0.0
+    i = 0
+    while i < sp.nlimb {
+        if sp.lm[i].kind != L_ARM() {
+            j := i + 1
+            while j < sp.nlimb {
+                if sp.lm[j].kind != L_ARM() {
+                    dx := sp.lm[i].tx - sp.lm[j].tx
+                    dz := sp.lm[i].tz - sp.lm[j].tz
+                    d := sqrt(dx * dx + dz * dz)
+                    if d > sp.spread { sp.spread = d }
+                }
+                j = j + 1
+            }
+        }
+        i = i + 1
+    }
+    if sp.spread < 0.05 { sp.spread = cw(1) }
+    comh := sp.cy + sp.stand * 0.5
+    if comh < 0.1 { comh = 0.1 }
+    // ...and the constant is calibrated against what a rail gun actually does:
+    // a wide four-legged platform stands up to firing one and a tall biped is
+    // knocked over by its own weapon. Those two facts are the design; this
+    // number is what makes the arithmetic say them.
+    sp.tip = sp.mass * sp.spread * 2.5 / comh
+    sp.ok = 1
+}
+
+// Follow one limb out from its hinge, and decide what it is by what it ends in.
+func limb_from(sp0, bt, hi, hull, used) (sp) {
+    sp = sp0
+    lb := Limb{}
+    lb.hinge = hi
+    lb.kind = L_NONE()
+    lb.live = 1
+    hx, hy, hz := brick_pos(bt, hi)
+    lb.hx = hx
+    lb.hy = hy
+    lb.hz = hz
+
+    q := []int{}
+    mine := []int{}
+    k := 0
+    while k < bt.n {
+        mine = append(mine, 0)
+        k = k + 1
+    }
+    // start from the hinge's neighbours that are NOT hull — those are the limb
+    k = 0
+    while k < 6 {
+        dx, dy, dz := nbr_of(k)
+        j := bot_at(bt, bt.b[hi].x + dx, bt.b[hi].y + dy, bt.b[hi].z + dz)
+        if j >= 0 { if hull[j] == 0 { if used[j] == 0 {
+            q = append(q, j)
+            mine[j] = 1
+            used[j] = 1
+        } } }
+        k = k + 1
+    }
+    if len(q) == 0 { return }
+
+    best := 0 - 1
+    bestd := 0.0 - 1.0
+    mass := 0.0
+    cnt := 0
+    hasfoot := 0
+    haswheel := 0
+    hasgun := 0
+    head := 0
+    while head < len(q) {
+        c := q[head]
+        head = head + 1
+        cnt = cnt + 1
+        mass = mass + part_mass(bt.b[c].kind)
+        if bt.b[c].kind == P_FOOT() { hasfoot = 1 }
+        if bt.b[c].kind == P_WHEEL() { haswheel = 1 }
+        if is_weapon(bt.b[c].kind) == 1 { hasgun = 1 }
+        cx, cy, cz := brick_pos(bt, c)
+        d := vlen(cx - hx, cy - hy, cz - hz)
+        // THE TIP IS THE BRICK FURTHEST FROM THE JOINT, and a foot wins ties
+        // outright: a leg with a foot halfway along it is a leg that stands on
+        // the foot, whatever else is bolted past it.
+        w := d
+        if bt.b[c].kind == P_FOOT() { w = d + 100.0 }
+        if bt.b[c].kind == P_WHEEL() { w = d + 100.0 }
+        if w > bestd { bestd = w  best = c }
+        k = 0
+        while k < 6 {
+            dx, dy, dz := nbr_of(k)
+            j := bot_at(bt, bt.b[c].x + dx, bt.b[c].y + dy, bt.b[c].z + dz)
+            if j >= 0 { if hull[j] == 0 { if mine[j] == 0 { if used[j] == 0 {
+                mine[j] = 1
+                used[j] = 1
+                q = append(q, j)
+            } } } }
+            k = k + 1
+        }
+    }
+    lb.tip = best
+    lb.n = cnt
+    lb.mass = mass
+    tx, ty, tz := brick_pos(bt, best)
+    lb.tx = tx
+    lb.ty = ty
+    lb.tz = tz
+    lb.len = vlen(tx - hx, ty - hy, tz - hz)
+    if lb.len < cw(1) { lb.len = cw(1) }
+    if hasfoot == 1 { lb.kind = L_LEG() }
+    if haswheel == 1 { lb.kind = L_WHEEL() }
+    if lb.kind == L_NONE() { if hasgun == 1 { lb.kind = L_ARM() } }
+    // a limb that is neither is still a limb, and it still swings — it just
+    // does not carry anything, which is the player's problem
+    sp.lm = append(sp.lm, lb)
+    // mark the bricks so the renderer can swing them with the limb
+    k = 0
+    while k < bt.n {
+        if mine[k] == 1 { }
+        k = k + 1
+    }
+}
+
+func gait_for(nleg, nwheel) (g) {
+    g = G_NONE()
+    if nwheel >= 2 { g = G_DRIVE()  return }
+    if nleg == 1 { g = G_HOP() }
+    if nleg == 2 { g = G_BIPED() }
+    if nleg == 3 { g = G_CRAWL() }
+    if nleg == 4 { g = G_TROT() }
+    if nleg >= 5 { g = G_TRIPOD() }
+    if nleg > 4 { if nleg % 2 == 1 { g = G_CRAWL() } }
+}

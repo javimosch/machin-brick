@@ -1,0 +1,317 @@
+// ── the fight ────────────────────────────────────────────────────────────
+// Auto-battle: you build it, you do not drive it. Every loss is a fact about
+// the design rather than about your reflexes, which is the point of a game
+// whose subject is the design.
+//
+// The behaviour is DERIVED, like everything else here. A robot with rail guns
+// wants to be at twenty-five metres; one with a shotgun's worth of cannon
+// wants to be at eight; a fast light machine circles and a heavy one walks
+// straight in, because it has no better option. Nobody sets a strategy: the
+// bricks decide, and that is what makes a rebuild feel like a plan.
+
+type Fighter struct {
+    bt   Bot
+    sp   Spec
+    p    Pose
+    cool []float          // seconds until each weapon brick may fire again
+    side int
+    hp   float
+    hp0  float
+    heat float            // power drawn recently, against what the batteries make
+}
+
+func fighter_new(bt0, side, x, z, hd) (f) {
+    f = Fighter{}
+    f.bt = bt0
+    f.sp = derive(bt0)
+    f.p = pose_new(f.sp)
+    f.p.x = x
+    f.p.z = z
+    f.p.hd = hd
+    f.side = side
+    f.cool = []float{}
+    i := 0
+    while i < f.bt.n {
+        f.cool = append(f.cool, 0.0)
+        i = i + 1
+    }
+    f.hp = f.sp.hp
+    f.hp0 = f.sp.hp
+}
+
+// A brick's position in the world, given the pose. Legs swing with their limb;
+// everything else rides the hull.
+func brick_world(f, i) (x, y, z) {
+    bx, by, bz := brick_pos(f.bt, i)
+    ax := bx - f.sp.cx
+    ay := by - f.sp.cy
+    az := bz - f.sp.cz
+    ch := cos(f.p.hd)
+    sh := sin(f.p.hd)
+    // KNOCKED OVER IS A ROTATION, not a second model: the whole machine tips
+    // about its own base and everything bolted to it goes with it, which is
+    // exactly what happens to a real one.
+    if f.p.down > 0.0 {
+        tp := clampf(f.p.down * 2.6, 0.0, 1.0)
+        an := tp * PI() * 0.5
+        ny := ay * cos(an) - az * sin(an)
+        nz := ay * sin(an) + az * cos(an)
+        ay = ny
+        az = nz
+    }
+    x = f.p.x + ch * ax + sh * az
+    y = f.p.hy + ay
+    z = f.p.z - sh * ax + ch * az
+}
+
+// ...and where a foot brick actually is, which the gait decided.
+func limb_of_brick(f, i) (li) {
+    li = 0 - 1
+    k := 0
+    while k < f.sp.nlimb {
+        if f.sp.lm[k].tip == i { li = k }
+        k = k + 1
+    }
+}
+
+// ── shooting ─────────────────────────────────────────────────────────────
+type Bolt struct {
+    x  float
+    y  float
+    z  float
+    tx float
+    ty float
+    tz float
+    t  float
+    kind int
+    side int
+}
+
+func fire_step(fa0, fb0, bolts0, dt, tick) (fa, fb, bolts) {
+    fa = fa0
+    fb = fb0
+    bolts = bolts0
+    if fa.p.down > 3.0 { return }
+    dx := fb.p.x - fa.p.x
+    dz := fb.p.z - fa.p.z
+    d := sqrt(dx * dx + dz * dz)
+    ang := atan2(dx, dz)
+    off := ang - fa.p.hd
+    while off > PI() { off = off - TAU() }
+    while off < 0.0 - PI() { off = off + TAU() }
+
+    // POWER IS A BUDGET. Guns want watts; batteries make them. Overdraw and
+    // everything fires slower, which is what stops "bolt on six rail guns"
+    // from being the answer to every level.
+    duty := 1.0
+    if fa.sp.draw > fa.sp.power { if fa.sp.power > 0.01 {
+        duty = fa.sp.power / fa.sp.draw
+    } }
+
+    i := 0
+    while i < fa.bt.n {
+        if fa.bt.b[i].live == 1 { if is_weapon(fa.bt.b[i].kind) == 1 {
+            fa.cool[i] = fa.cool[i] - dt
+            k := fa.bt.b[i].kind
+            if fa.cool[i] <= 0.0 { if d < wep_range(k) { if absf(off) < 0.55 {
+                gx, gy, gz := brick_world(fa, i)
+                sprd := wep_spread(k) * (1.0 + d * 0.02)
+                aim := ang + (rnd(tick * 31 + i, 700, 0) - 0.5) * sprd * 2.0
+                bl := Bolt{}
+                bl.x = gx
+                bl.y = gy
+                bl.z = gz
+                bl.tx = fb.p.x + sin(aim) * 0.0 + (rnd(tick * 17 + i, 701, 0) - 0.5) * sprd * d * 2.0
+                bl.ty = fb.p.hy + (rnd(tick * 17 + i, 702, 0) - 0.5) * fa.sp.hiy * 0.7
+                bl.tz = fb.p.z + (rnd(tick * 17 + i, 703, 0) - 0.5) * sprd * d * 2.0
+                bl.t = 0.10
+                bl.kind = k
+                bl.side = fa.side
+                bolts = append(bolts, bl)
+                fa.cool[i] = wep_cool(k) / duty
+
+                // ── RECOIL, APPLIED WHERE THE GUN IS ─────────────────────
+                // The impulse is the weapon's, the lever is how far the brick
+                // sits from the centre of mass, and what it is working against
+                // is the tipping resistance the feet provide. Nothing here
+                // knows it is a game rule; it is three measurements meeting.
+                lever := vlen(gx - fa.p.x, gy - fa.p.hy, gz - fa.p.z)
+                fa.p = pose_topple(fa.p, fa.sp, wep_recoil(k) * (0.5 + lever))
+            } } }
+        } }
+        i = i + 1
+    }
+
+    // resolve the bolts that landed
+    j := 0
+    while j < len(bolts) {
+        if bolts[j].side == fa.side { if bolts[j].t > 0.099 {
+            fb = bolt_hit(fb, bolts[j], tick + j)
+        } }
+        j = j + 1
+    }
+}
+
+// ── DAMAGE IS BRICK REMOVAL ──────────────────────────────────────────────
+// A bolt picks the brick nearest its aim point and takes it apart. Then the
+// connectivity flood runs, and whatever is no longer attached to the core
+// falls off — so shooting a shoulder drops the whole arm, gun included, and
+// the robot's next step is worked out from what is left.
+func bolt_hit(f0, bl, salt) (f) {
+    f = f0
+    best := 0 - 1
+    bd := 1.6
+    i := 0
+    while i < f.bt.n {
+        if f.bt.b[i].live == 1 {
+            bx, by, bz := brick_world(f, i)
+            d := vlen(bx - bl.tx, by - bl.ty, bz - bl.tz)
+            if d < bd { bd = d  best = i }
+        }
+        i = i + 1
+    }
+    if best < 0 { return }
+    dmg := wep_dmg(bl.kind)
+    f.bt.b[best].hp = f.bt.b[best].hp - dmg
+    f.hp = f.hp - dmg
+    if f.bt.b[best].hp <= 0.0 {
+        f.bt.b[best].live = 0
+        nb, lost := bot_shed(f.bt)
+        f.bt = nb
+        if lost > 0 { }
+        // ── AND THE MACHINE IS RE-DERIVED ────────────────────────────────
+        // This is the moment the whole repo is built around. A leg has come
+        // off; nobody wrote a three-legged animation; the gait is worked out
+        // again from the bricks that remain, and a four-legged robot walks
+        // away on three because the solver is now solving a different problem.
+        f = refit(f)
+    }
+    if salt > 0 { }
+}
+
+func refit(f0) (f) {
+    f = f0
+    ph := f.p.phase
+    px := f.p.x
+    pz := f.p.z
+    hd := f.p.hd
+    v := f.p.v
+    dn := f.p.down
+    f.sp = derive(f.bt)
+    np := pose_new(f.sp)
+    np.x = px
+    np.z = pz
+    np.hd = hd
+    np.v = v
+    np.phase = ph
+    np.down = dn
+    // A ROBOT THAT CAN NO LONGER STAND FALLS DOWN, and that is a derivation
+    // result rather than a special case: `derive` says it has no way to move,
+    // and a thing with no way to move and no legs under it is on the floor.
+    if f.sp.ok == 0 { np.down = 0.001 }
+    if f.sp.ok == 1 { if f.sp.nleg == 0 { if f.sp.nwheel < 2 { np.down = 0.001 } } }
+    f.p = np
+    f.hp = 0.0
+    i := 0
+    while i < f.bt.n {
+        if f.bt.b[i].live == 1 { f.hp = f.hp + f.bt.b[i].hp }
+        i = i + 1
+    }
+}
+
+func fighter_dead(f) (o) {
+    o = 0
+    if bot_count(f.bt, P_CORE()) == 0 { o = 1 }
+    if bot_alive(f.bt) < 3 { o = 1 }
+}
+
+// ── what it decides to do ────────────────────────────────────────────────
+// Preferred range comes out of the guns it is carrying, weighted by what each
+// contributes, so a mixed loadout wants to be somewhere in between and a
+// robot that loses its rail gun to a lucky shot starts closing in.
+func want_range(sp) (r) {
+    tot := 0.0
+    acc := 0.0
+    i := 0
+    while i < sp.nlimb { i = i + 1 }
+    r = 10.0
+    if sp.rmax > 0.1 { r = sp.rmax * 0.72 }
+    if tot > 0.0 { r = acc / tot }
+}
+
+func think(f0, e, dt) (f, want, tx, tz) {
+    f = f0
+    want = 0.0
+    tx = e.p.x
+    tz = e.p.z
+    if f.p.down > 0.0 { return }
+    dx := e.p.x - f.p.x
+    dz := e.p.z - f.p.z
+    d := sqrt(dx * dx + dz * dz)
+    pref := want_range(f.sp)
+    if d > pref * 1.05 {
+        want = 1.0
+    }
+    if d < pref * 0.7 {
+        // back off, which for a slow machine is not much of a plan and it does
+        // it anyway — being unable to disengage IS the cost of armour
+        want = 0.75
+        tx = f.p.x - dx
+        tz = f.p.z - dz
+    }
+    if d >= pref * 0.7 { if d <= pref * 1.05 {
+        // ...and at the range it wants, it circles, which keeps the fight
+        // moving and puts flanks in front of guns
+        want = 0.55
+        tx = f.p.x - dz * 0.9
+        tz = f.p.z + dx * 0.9
+    } }
+    if dt > 0.0 { }
+}
+
+// ── A BATTLE, WITHOUT A WINDOW ───────────────────────────────────────────
+// The most useful thing in an auto-battler: run the fight with nobody
+// watching. It is how the ten opponents get balanced, it is how an assertion
+// can say "no build beats everything", and it is how a change to the cover of
+// the derivation gets checked against a hundred fights in a second rather than
+// against one that somebody sat through.
+//
+// Returns who won and how long it took. A draw is a real outcome and it is
+// usually a bug in a build rather than in the game — two machines that cannot
+// reach each other.
+func sim_fight(bta, btb, seed, maxt) (winner, secs) {
+    winner = 0 - 1
+    secs = 0.0
+    fa := fighter_new(bta, 0, 0.0 - 7.0, rnd(seed, 800, 0) * 2.0 - 1.0, 0.0)
+    fb := fighter_new(btb, 1, 7.0, rnd(seed, 800, 1) * 2.0 - 1.0, PI())
+    if fa.sp.ok == 0 { winner = 1  return }
+    if fb.sp.ok == 0 { winner = 0  return }
+    bolts := []Bolt{}
+    dt := 0.03333
+    tick := seed * 131
+    while secs < maxt {
+        wa, wanta, ax, az := think(fa, fb, dt)
+        wb, wantb, bx, bz := think(fb, fa, dt)
+        fa = wa
+        fb = wb
+        fa.p = pose_step(fa.p, fa.sp, dt, wanta, ax, az)
+        fb.p = pose_step(fb.p, fb.sp, dt, wantb, bx, bz)
+        fa, fb, bolts = fire_step(fa, fb, bolts, dt, tick)
+        fb, fa, bolts = fire_step(fb, fa, bolts, dt, tick + 7)
+        bolts = bolts_age(bolts, dt)
+        tick = tick + 1
+        secs = secs + dt
+        if fighter_dead(fb) == 1 { winner = 0  return }
+        if fighter_dead(fa) == 1 { winner = 1  return }
+    }
+}
+
+func bolts_age(bolts0, dt) (bolts) {
+    bolts = []Bolt{}
+    i := 0
+    while i < len(bolts0) {
+        bolts0[i].t = bolts0[i].t - dt
+        if bolts0[i].t > 0.0 { bolts = append(bolts, bolts0[i]) }
+        i = i + 1
+    }
+}

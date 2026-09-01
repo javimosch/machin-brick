@@ -1,0 +1,278 @@
+// ── machin-brick ─────────────────────────────────────────────────────────
+// Two modes: a workshop where you stack bricks, and an arena where what you
+// stacked has to walk and fight. Nothing is carried between them except the
+// bricks — the gait, the speed, the steadiness and the behaviour are all
+// worked out afresh from the build, which is the entire idea.
+
+func gflag(argv, nm, dflt) (v) {
+    v = dflt
+    i := 0
+    while i < len(argv) {
+        if argv[i] == nm { if i + 1 < len(argv) { v = argv[i + 1] } }
+        i = i + 1
+    }
+}
+
+func gon(argv, nm) (v) {
+    v = 0
+    i := 0
+    while i < len(argv) {
+        if argv[i] == nm { v = 1 }
+        i = i + 1
+    }
+}
+
+func M_BUILD() (v) { v = 0 }
+func M_FIGHT() (v) { v = 1 }
+
+// Where a mouse ray meets the build layer, in grid cells.
+func pick_cell(cam, mx, my, layer) (cx, cz, ok) {
+    cx = 0
+    cz = 0
+    ok = 0
+    r := GetMouseRay(v2(float(mx), float(my)), cam)
+    if absf(r.direction.y) < 0.0001 { return }
+    yp := cw(layer)
+    t := (yp - r.position.y) / r.direction.y
+    if t < 0.0 { return }
+    px := r.position.x + r.direction.x * t
+    pz := r.position.z + r.direction.z * t
+    cx = int(px / CW() + 0.5)
+    cz = int(pz / CW() + 0.5)
+    if in_grid(cx, layer, cz) == 1 { ok = 1 }
+}
+
+func main() {
+    argv := args()
+    mine := gflag(argv, "--bot", "bots/starter.txt")
+    theirs := gflag(argv, "--foe", "bots/foe1.txt")
+    shot := gflag(argv, "--shot", "")
+    shot_at := parse_int(gflag(argv, "--at", "120"))
+    mode := M_BUILD()
+    if gon(argv, "--fight") == 1 { mode = M_FIGHT() }
+
+    bt, bok := bot_read(mine)
+    if bok == 0 { bt = bot_new() }
+    fo, fok := bot_read(theirs)
+    if fok == 0 { fo = bot_new() }
+
+    if gon(argv, "--spec") == 1 {
+        sp := derive(bt)
+        println("robot " + bt.name + ": " + str(bot_alive(bt)) + " bricks")
+        if sp.ok == 0 { println("  cannot fight: " + sp.fault)  exit(1) }
+        println("  " + gait_name(sp.gait) + ", " + str(sp.nleg) + " legs, "
+                + str(sp.narm) + " arms")
+        println("  mass " + str(sp.mass) + " kg   torque " + str(sp.torque)
+                + "   power " + str(sp.power) + "/" + str(sp.draw) + " W")
+        println("  speed " + str(sp.speed) + " m/s   turn " + str(sp.turn)
+                + " rad/s   reach " + str(sp.reach) + " m")
+        println("  steadiness " + str(sp.tip) + "   spread " + str(sp.spread)
+                + " m   armour " + str(sp.hp))
+        exit(0)
+    }
+
+    // ── the headless battle ──────────────────────────────────────────────
+    if gflag(argv, "--sim", "") != "" {
+        n := parse_int(gflag(argv, "--sim", "9"))
+        na := 0
+        nb := 0
+        dr := 0
+        tot := 0.0
+        i := 0
+        while i < n {
+            wn, secs := sim_fight(bt, fo, i * 17 + 3, 90.0)
+            if wn == 0 { na = na + 1 }
+            if wn == 1 { nb = nb + 1 }
+            if wn < 0 { dr = dr + 1 }
+            tot = tot + secs
+            i = i + 1
+        }
+        println(bt.name + " vs " + fo.name + " over " + str(n) + " fights:")
+        println("  " + str(na) + " - " + str(nb) + "   draws " + str(dr)
+                + "   mean " + str(int(tot / float(n))) + " s")
+        exit(0)
+    }
+
+    sel := P_BEAM()
+    layer := 0
+    mirror := 1
+    camyaw := 0.7
+    campit := 0.62
+    camd := 4.6
+    mx0 := 0
+    my0 := 0
+    drag := 0
+    paused := 0
+    over := ""
+
+    InitWindow(W(), H(), "machin-brick")
+    SetTargetFPS(60)
+    rlDisableBackfaceCulling()
+
+    fa := fighter_new(bt, 0, 0.0 - 7.0, 0.0, 0.0)
+    fb := fighter_new(fo, 1, 7.0, 0.0, PI())
+    bolts := []Bolt{}
+    if mode == M_FIGHT() { }
+
+    frame := 0
+    while WindowShouldClose() == false {
+        dt := 0.016666
+        frame = frame + 1
+        if IsKeyPressed(K_ESC()) { break }
+        if IsKeyPressed(K_F11()) { ToggleBorderlessWindowed() }
+
+        // camera, shared by both modes
+        if IsMouseButtonDown(1) == false { }
+        wheel := clampf(GetMouseWheelMove(), 0.0 - 1.0, 1.0)
+        if mode == M_BUILD() { camd = clampf(camd - wheel * 0.4, 1.6, 9.0) }
+        if mode == M_FIGHT() { camd = clampf(camd - wheel * 1.2, 6.0, 40.0) }
+        if IsKeyDown(K_Q()) { camyaw = camyaw - dt * 1.4 }
+        if IsKeyDown(K_E()) { camyaw = camyaw + dt * 1.4 }
+
+        if IsKeyPressed(K_TAB()) {
+            if mode == M_BUILD() {
+                mode = M_FIGHT()
+                fa = fighter_new(bt, 0, 0.0 - 7.0, 0.0, 0.0)
+                fb = fighter_new(fo, 1, 7.0, 0.0, PI())
+                bolts = []Bolt{}
+                over = ""
+                camd = 16.0
+            } else {
+                mode = M_BUILD()
+                camd = 4.6
+            }
+        }
+
+        if mode == M_BUILD() {
+            // ── the workshop ─────────────────────────────────────────────
+            if IsKeyPressed(K_1()) { sel = P_CORE() }
+            if IsKeyPressed(K_2()) { sel = P_BEAM() }
+            if IsKeyPressed(K_3()) { sel = P_ARMOUR() }
+            if IsKeyPressed(K_4()) { sel = P_HINGE() }
+            if IsKeyPressed(K_5()) { sel = P_FOOT() }
+            if IsKeyPressed(K_6()) { sel = P_WHEEL() }
+            if IsKeyPressed(K_7()) { sel = P_MOTOR() }
+            if IsKeyPressed(K_8()) { sel = P_BATT() }
+            if IsKeyPressed(K_9()) { sel = P_GUN() }
+            if IsKeyPressed(K_0()) { sel = P_RAIL() }
+            if IsKeyPressed(K_MINUS()) { sel = P_ROCKET() }
+            if IsKeyPressed(K_X()) { mirror = 1 - mirror }
+            if IsKeyPressed(K_RBRACK()) { layer = layer + 1  if layer >= GY() { layer = GY() - 1 } }
+            if IsKeyPressed(K_LBRACK()) { layer = layer - 1  if layer < 0 { layer = 0 } }
+            if IsKeyPressed(K_S()) { bot_write(mine, bt) }
+        }
+
+        // ── the camera ───────────────────────────────────────────────────
+        tx := cw(GX() / 2)
+        ty := cw(layer) + 0.4
+        tz := cw(GZ() / 2)
+        if mode == M_FIGHT() {
+            // FRAME BOTH OF THEM. A duel camera that does not is a camera
+            // showing you half a fight, and the distance between two machines
+            // is the one number that says how far back to stand.
+            tx = (fa.p.x + fb.p.x) * 0.5
+            ty = 0.8
+            tz = (fa.p.z + fb.p.z) * 0.5
+            sep := vlen(fa.p.x - fb.p.x, 0.0, fa.p.z - fb.p.z)
+            camd = approach(camd, clampf(sep * 1.15 + 6.0, 8.0, 40.0), 12.0 * dt)
+        }
+        cam := Camera3D{v3(tx - sin(camyaw) * cos(campit) * camd,
+                           ty + sin(campit) * camd,
+                           tz - cos(camyaw) * cos(campit) * camd),
+                        v3(tx, ty, tz), v3(0.0, 1.0, 0.0), 46.0, 0}
+
+        gcx := 0
+        gcz := 0
+        gok := 0
+        if mode == M_BUILD() {
+            gcx, gcz, gok = pick_cell(cam, GetMouseX(), GetMouseY(), layer)
+            if IsMouseButtonPressed(0) { if gok == 1 {
+                if mirror == 1 { bt = bot_mirror(bt, gcx, layer, gcz, sel) }
+                if mirror == 0 { bt = bot_add(bt, gcx, layer, gcz, sel) }
+            } }
+            if IsMouseButtonPressed(1) { if gok == 1 {
+                if mirror == 1 { bt = bot_del_mirror(bt, gcx, layer, gcz) }
+                if mirror == 0 { bt = bot_del(bt, gcx, layer, gcz) }
+            } }
+        }
+
+        if mode == M_FIGHT() {
+            if IsKeyPressed(K_SPACE()) { paused = 1 - paused }
+            if IsKeyPressed(K_R()) {
+                fa = fighter_new(bt, 0, 0.0 - 7.0, 0.0, 0.0)
+                fb = fighter_new(fo, 1, 7.0, 0.0, PI())
+                bolts = []Bolt{}
+                over = ""
+            }
+            if paused == 0 { if over == "" {
+                wa, wanta, ax, az := think(fa, fb, dt)
+                wb, wantb, bx, bz := think(fb, fa, dt)
+                fa = wa
+                fb = wb
+                fa.p = pose_step(fa.p, fa.sp, dt, wanta, ax, az)
+                fb.p = pose_step(fb.p, fb.sp, dt, wantb, bx, bz)
+                fa, fb, bolts = fire_step(fa, fb, bolts, dt, frame)
+                fb, fa, bolts = fire_step(fb, fa, bolts, dt, frame + 7)
+                bolts = bolts_age(bolts, dt)
+                if fighter_dead(fb) == 1 { over = "you win" }
+                if fighter_dead(fa) == 1 { over = "you lose" }
+            } }
+        }
+
+        BeginDrawing()
+        ClearBackground(col(22, 26, 33))
+        BeginMode3D(cam)
+        tris := 0
+        if mode == M_BUILD() {
+            tris = grid_draw()
+            gf := fighter_new(bt, 0, cw(GX() / 2), cw(GZ() / 2), 0.0)
+            gf.p.hy = 0.0
+            gf.p.x = 0.0
+            gf.p.z = 0.0
+            // in the workshop it stands where it was built, not where it walks
+            i := 0
+            while i < bt.n {
+                if bt.b[i].live == 1 {
+                    tris = tris + brick_draw(cw(bt.b[i].x), cw(bt.b[i].y),
+                                             cw(bt.b[i].z), 0.0, bt.b[i].kind, 1.0)
+                }
+                i = i + 1
+            }
+            if gok == 1 {
+                // the ghost: where the brick would land
+                tris = tris + brick_draw(cw(gcx), cw(layer), cw(gcz), 0.0, sel, 0.55)
+                if mirror == 1 { if mirror_x(gcx) != gcx {
+                    tris = tris + brick_draw(cw(mirror_x(gcx)), cw(layer), cw(gcz),
+                                             0.0, sel, 0.4)
+                } }
+            }
+        } else {
+            tris = arena_draw()
+            tris = tris + bot_draw(fa, 1.0)
+            tris = tris + bot_draw(fb, 0.92)
+            rlBegin(RL_TRIANGLES())
+            rlSetTexture(0)
+            i := 0
+            while i < len(bolts) {
+                bl := bolts[i]
+                rlColor4ub(250, 220, 140, 255)
+                rlVertex3f(bl.x, bl.y, bl.z)
+                rlVertex3f(bl.tx, bl.ty, bl.tz)
+                rlVertex3f(bl.tx, bl.ty + 0.04, bl.tz)
+                i = i + 1
+            }
+            rlEnd()
+        }
+        EndMode3D()
+
+        if mode == M_BUILD() { build_hud(derive(bt), sel, mirror, bot_alive(bt)) }
+        if mode == M_FIGHT() { fight_hud(fa, fb, tris, GetFPS(), over) }
+        EndDrawing()
+
+        if shot != "" { if frame == shot_at {
+            TakeScreenshot(shot)
+            break
+        } }
+    }
+    CloseWindow()
+}

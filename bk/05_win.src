@@ -1,0 +1,15 @@
+func W() (v) { v = 1440 }
+func H() (v) { v = 810 }
+
+// The world is a grid of cells 18 cm on a side, which makes a brick about the
+// size of a real Technic beam segment and a two-metre robot eleven bricks
+// tall. Everything in this repo that is a length is either CELLS (integers,
+// the build) or METRES (floats, the fight), and the two never mix — every
+// conversion goes through `cw`.
+func CW() (v) { v = 0.18 }
+func cw(n) (v) { v = float(n) * CW() }
+
+// the build volume
+func GX() (v) { v = 15 }
+func GY() (v) { v = 19 }
+func GZ() (v) { v = 15 }

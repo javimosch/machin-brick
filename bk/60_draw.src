@@ -1,0 +1,218 @@
+// ── drawing bricks ───────────────────────────────────────────────────────
+// A brick is a box with a stud on it, and the stud is doing a surprising
+// amount of work: without it the build reads as voxels, and with it, at any
+// distance, it reads as a toy that was assembled. It costs four triangles.
+
+// `v3`, `col` and `col_a` come from the shared FFI — one C boundary, and one
+// place that knows what a Vector3 is.
+func v2(x, y) (v) { v = Vector2{x, y} }
+
+func quad3(ax, ay, az, bx, by, bz, cx, cy, cz, dx, dy, dz, kr, kg, kb, fct) {
+    rr := int(clampf(float(kr) * fct, 0.0, 255.0))
+    gg := int(clampf(float(kg) * fct, 0.0, 255.0))
+    bb := int(clampf(float(kb) * fct, 0.0, 255.0))
+    rlColor4ub(rr, gg, bb, 255)
+    rlVertex3f(ax, ay, az)
+    rlVertex3f(bx, by, bz)
+    rlVertex3f(cx, cy, cz)
+    rlColor4ub(rr, gg, bb, 255)
+    rlVertex3f(ax, ay, az)
+    rlVertex3f(cx, cy, cz)
+    rlVertex3f(dx, dy, dz)
+}
+
+// A box in the world, rotated about Y. Every brick and every wall goes through
+// this, and the shading is four fixed factors rather than a light — a flat
+// shade a face is what makes moulded plastic read as moulded plastic.
+func box_y(cx, cy, cz, hw, hh, hd, ang, kr, kg, kb, top) (tris) {
+    tris = 12
+    ca := cos(ang)
+    sa := sin(ang)
+    x0 := 0.0 - hw
+    x1 := hw
+    z0 := 0.0 - hd
+    z1 := hd
+    // the eight corners, rotated
+    ax0 := cx + ca * x0 + sa * z0
+    az0 := cz - sa * x0 + ca * z0
+    ax1 := cx + ca * x1 + sa * z0
+    az1 := cz - sa * x1 + ca * z0
+    ax2 := cx + ca * x1 + sa * z1
+    az2 := cz - sa * x1 + ca * z1
+    ax3 := cx + ca * x0 + sa * z1
+    az3 := cz - sa * x0 + ca * z1
+    y0 := cy - hh
+    y1 := cy + hh
+    quad3(ax0, y1, az0, ax3, y1, az3, ax2, y1, az2, ax1, y1, az1, kr, kg, kb, top)
+    quad3(ax0, y0, az0, ax0, y1, az0, ax1, y1, az1, ax1, y0, az1, kr, kg, kb, 0.80)
+    quad3(ax2, y0, az2, ax2, y1, az2, ax3, y1, az3, ax3, y0, az3, kr, kg, kb, 0.62)
+    quad3(ax3, y0, az3, ax3, y1, az3, ax0, y1, az0, ax0, y0, az0, kr, kg, kb, 0.92)
+    quad3(ax1, y0, az1, ax1, y1, az1, ax2, y1, az2, ax2, y0, az2, kr, kg, kb, 0.71)
+}
+
+// A brick: the box, and the stud that says what it is.
+func brick_draw(cx, cy, cz, ang, kind, dim) (tris) {
+    kr, kg, kb := part_col(kind)
+    kr = int(float(kr) * dim)
+    kg = int(float(kg) * dim)
+    kb = int(float(kb) * dim)
+    h := CW() * 0.5
+    tris = box_y(cx, cy, cz, h * 0.96, h * 0.96, h * 0.96, ang, kr, kg, kb, 1.06)
+    // THE STUD. Four triangles, and the difference between a voxel and a toy.
+    tris = tris + box_y(cx, cy + h * 1.15, cz, h * 0.42, h * 0.22, h * 0.42, ang,
+                        kr, kg, kb, 1.16)
+}
+
+// ── the machine ──────────────────────────────────────────────────────────
+// Hull bricks ride the body; a leg's bricks are strung between its hinge and
+// wherever the gait put its foot, which is what makes a limb visibly swing
+// without anything storing a limb pose.
+func bot_draw(f, dim) (tris) {
+    tris = 0
+    rlBegin(RL_TRIANGLES())
+    rlSetTexture(0)
+    rlEnd()
+    i := 0
+    while i < f.bt.n {
+        if f.bt.b[i].live == 1 {
+            li := brick_limb(f, i)
+            bx := 0.0
+            by := 0.0
+            bz := 0.0
+            if li < 0 {
+                bx, by, bz = brick_world(f, i)
+            } else {
+                bx, by, bz = limb_brick_world(f, i, li)
+            }
+            tris = tris + brick_draw(bx, by, bz, f.p.hd, f.bt.b[i].kind, dim)
+        }
+        i = i + 1
+    }
+}
+
+// Which limb a brick belongs to. Recomputed rather than stored, because the
+// robot loses bricks and the answer changes; it is a small graph.
+func brick_limb(f, i) (li) {
+    li = 0 - 1
+    hull := hull_of(f.bt)
+    if hull[i] == 1 { return }
+    // the nearest hinge that has a limb
+    bd := 99.0
+    k := 0
+    while k < f.sp.nlimb {
+        hi := f.sp.lm[k].hinge
+        d := float(iabs(f.bt.b[i].x - f.bt.b[hi].x) + iabs(f.bt.b[i].y - f.bt.b[hi].y)
+                   + iabs(f.bt.b[i].z - f.bt.b[hi].z))
+        if d < bd { bd = d  li = k }
+        k = k + 1
+    }
+}
+
+func iabs(v) (o) { o = v  if v < 0 { o = 0 - v } }
+
+// A limb brick sits along the line from its hinge to the tip's current world
+// position, at the fraction of the way it was built at. Two bones would bend
+// at a knee; one line reads correctly at this size and never inverts.
+func limb_brick_world(f, i, li) (x, y, z) {
+    hx, hy, hz := hinge_world_y(f, li)
+    tx := hx
+    ty := hy
+    tz := hz
+    if f.sp.lm[li].kind == L_LEG() {
+        tx = f.p.fx[li]
+        ty = f.p.fy[li]
+        tz = f.p.fz[li]
+    } else {
+        // an arm keeps the shape it was built in, carried by the hull
+        tx, ty, tz = brick_world_at(f, f.sp.lm[li].tx, f.sp.lm[li].ty, f.sp.lm[li].tz)
+    }
+    // how far along the limb this brick was built
+    bx, by, bz := brick_pos(f.bt, i)
+    ld := vlen(f.sp.lm[li].tx - f.sp.lm[li].hx, f.sp.lm[li].ty - f.sp.lm[li].hy,
+               f.sp.lm[li].tz - f.sp.lm[li].hz)
+    if ld < 0.001 { ld = 0.001 }
+    t := vlen(bx - f.sp.lm[li].hx, by - f.sp.lm[li].hy, bz - f.sp.lm[li].hz) / ld
+    if t > 1.0 { t = 1.0 }
+    x = hx + (tx - hx) * t
+    y = hy + (ty - hy) * t
+    z = hz + (tz - hz) * t
+}
+
+func hinge_world_y(f, li) (x, y, z) {
+    x, y, z = brick_world_at(f, f.sp.lm[li].hx, f.sp.lm[li].hy, f.sp.lm[li].hz)
+}
+
+func brick_world_at(f, bx, by, bz) (x, y, z) {
+    ax := bx - f.sp.cx
+    ay := by - f.sp.cy
+    az := bz - f.sp.cz
+    ch := cos(f.p.hd)
+    sh := sin(f.p.hd)
+    if f.p.down > 0.0 {
+        tp := clampf(f.p.down * 2.6, 0.0, 1.0)
+        an := tp * PI() * 0.5
+        ny := ay * cos(an) - az * sin(an)
+        nz := ay * sin(an) + az * cos(an)
+        ay = ny
+        az = nz
+    }
+    x = f.p.x + ch * ax + sh * az
+    y = f.p.hy + ay
+    z = f.p.z - sh * ax + ch * az
+}
+
+// ── the arena ────────────────────────────────────────────────────────────
+func ARENA() (v) { v = 26.0 }
+
+func arena_draw() (tris) {
+    tris = 0
+    rlBegin(RL_TRIANGLES())
+    rlSetTexture(0)
+    n := 26
+    st := ARENA() * 2.0 / float(n)
+    iz := 0
+    while iz < n {
+        ix := 0
+        while ix < n {
+            x0 := 0.0 - ARENA() + float(ix) * st
+            z0 := 0.0 - ARENA() + float(iz) * st
+            sh := 1.0
+            if (ix + iz) % 2 == 0 { sh = 0.92 }
+            r := int(56.0 * sh)
+            g := int(60.0 * sh)
+            b := int(68.0 * sh)
+            rlColor4ub(r, g, b, 255)
+            rlVertex3f(x0, 0.0, z0)
+            rlVertex3f(x0, 0.0, z0 + st)
+            rlVertex3f(x0 + st, 0.0, z0 + st)
+            rlColor4ub(r, g, b, 255)
+            rlVertex3f(x0, 0.0, z0)
+            rlVertex3f(x0 + st, 0.0, z0 + st)
+            rlVertex3f(x0 + st, 0.0, z0)
+            tris = tris + 2
+            ix = ix + 1
+        }
+        iz = iz + 1
+    }
+    rlEnd()
+}
+
+// ── the build grid ───────────────────────────────────────────────────────
+// A floor of studs the size of the volume you may build in, so the hand knows
+// where the bricks will land before it puts one down.
+func grid_draw() (tris) {
+    tris = 0
+    x := 0
+    while x < GX() {
+        z := 0
+        while z < GZ() {
+            sh := 1.0
+            if (x + z) % 2 == 0 { sh = 0.82 }
+            tris = tris + box_y(cw(x), 0.0 - CW() * 0.5, cw(z),
+                                CW() * 0.5, CW() * 0.5, CW() * 0.5, 0.0,
+                                int(74.0 * sh), int(80.0 * sh), int(92.0 * sh), 1.0)
+            z = z + 1
+        }
+        x = x + 1
+    }
+}

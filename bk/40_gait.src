@@ -1,0 +1,321 @@
+// ── walking, for an arbitrary number of legs ─────────────────────────────
+// The three rules this family has used for five games, with the humanoid
+// taken out of them:
+//
+//   THE PHASE ADVANCES BY DISTANCE, NOT BY TIME. Unchanged, and it is what
+//   makes the animation-level-of-detail trick in the strategy game exact and
+//   what stops feet sliding when a robot's speed changes because it just lost
+//   an arm.
+//
+//   THE FEET LEAD AND THE BODY FOLLOWS. A planted foot is a world position
+//   that does not move. Generalising this to N legs turned out to need no
+//   thought at all: the hull sits at whatever height keeps EVERY planted leg
+//   inside its own length, which for two legs is the humanoid rule and for six
+//   is the same line of code with a longer loop.
+//
+//   CADENCE IS THE PRIMITIVE AND STRIDE IS DERIVED. Also unchanged, and the
+//   trap it guards against is worse here: a robot's speed comes out of the
+//   torque-to-mass ratio, so it is different for every build, and anything
+//   that modelled stride directly would squat differently for every robot.
+//
+// What IS new is the phase table: which legs are down together. That is the
+// only thing that differs between a biped, a trot and an alternating tripod,
+// and it is four lines.
+
+type Pose struct {
+    // where it is and which way it faces
+    x     float
+    z     float
+    hd    float
+    v     float
+    phase float
+    t     float
+    stepn int
+    // the feet, in the world. Two arrays, one entry a limb.
+    fx    []float
+    fy    []float
+    fz    []float
+    ox    []float          // ...and where each lifted off from, body-relative
+    oz    []float
+    sw    []int            // was it in swing last frame
+    fset  int
+    // the hull, resolved
+    hy    float
+    roll  float
+    pitch float
+    // knocked over
+    down  float
+}
+
+func pose_new(sp) (p) {
+    p = Pose{}
+    p.fx = []float{}
+    p.fy = []float{}
+    p.fz = []float{}
+    p.ox = []float{}
+    p.oz = []float{}
+    p.sw = []int{}
+    i := 0
+    while i < sp.nlimb {
+        p.fx = append(p.fx, 0.0)
+        p.fy = append(p.fy, 0.0)
+        p.fz = append(p.fz, 0.0)
+        p.ox = append(p.ox, 0.0)
+        p.oz = append(p.oz, 0.0)
+        p.sw = append(p.sw, 0)
+        i = i + 1
+    }
+    p.fset = 0
+    p.hy = sp.stand
+}
+
+// ── WHICH LEGS ARE DOWN TOGETHER ─────────────────────────────────────────
+// The whole difference between the gaits, as a phase offset per leg.
+//
+//   biped   0, ½                     one down at a time, the other swinging
+//   trot    diagonals together       0, ½, ½, 0 by which corner it is on
+//   tripod  alternate sets           0, ½, 0, ½, 0, ½ around the body
+//   crawl   one at a time            i/n, which is what you do when you cannot
+//                                    afford to have two feet up at once
+func leg_phase(sp, li, legi) (ph) {
+    ph = 0.0
+    g := sp.gait
+    if g == G_BIPED() { ph = float(legi % 2) * 0.5 }
+    if g == G_TRIPOD() { ph = float(legi % 2) * 0.5 }
+    if g == G_CRAWL() {
+        n := sp.nleg
+        if n < 1 { n = 1 }
+        ph = float(legi) / float(n)
+    }
+    if g == G_TROT() {
+        // diagonal pairs, and the diagonal is worked out from where the hinge
+        // actually is rather than from the order the player built them in
+        fwd := 0
+        rgt := 0
+        if sp.lm[li].hz > sp.cz { fwd = 1 }
+        if sp.lm[li].hx > sp.cx { rgt = 1 }
+        if fwd == rgt { ph = 0.0 } else { ph = 0.5 }
+    }
+    if g == G_HOP() { ph = 0.0 }
+}
+
+// Steps a second, and it is the legs that set it: a short leg has to step more
+// often to cover the same ground, exactly as a small animal does.
+func cadence(sp, v) (hz) {
+    l := sp.reach
+    if l < 0.05 { l = 0.05 }
+    hz = 0.55 + v * 0.62 / sqrt(l)
+    if hz < 0.5 { hz = 0.5 }
+    if hz > 4.5 { hz = 4.5 }
+}
+
+func step_of(sp, v) (d) {
+    c := cadence(sp, v)
+    if c < 0.01 { c = 0.01 }
+    d = v / c
+}
+
+// ...and a stride is two steps, which is the off-by-two that cost a day in the
+// last repo and is written down here so it costs nothing in this one.
+func stride_of(sp, v) (d) { d = step_of(sp, v) * 2.0 }
+
+// How much of the cycle a foot is down. MORE LEGS MEANS LESS TIME DOWN is
+// wrong — it is the opposite: a hexapod keeps three feet down at all times and
+// each foot is down half the cycle, while a biped needs over half or it is
+// running. What actually bounds it is the same thing as in the last game: a
+// planted foot travels stance × stride relative to the hull, and half of that
+// is how far the leg has to reach.
+func stance_frac(sp, v) (f) {
+    f = 0.62
+    if sp.gait == G_CRAWL() { f = 1.0 - 1.0 / float(sp.nleg) - 0.04 }
+    if sp.gait == G_TRIPOD() { f = 0.52 }
+    if sp.gait == G_TROT() { f = 0.55 }
+    if sp.gait == G_BIPED() { f = 0.62 - v * 0.05 }
+    if f < 0.28 { f = 0.28 }
+    lim := 0.62 * sp.reach / step_of(sp, v)
+    if f > lim { f = lim }
+    if f < 0.15 { f = 0.15 }
+}
+
+// HOW FAR AHEAD A FOOT PLANTS, and it is not a free number — it is the same
+// derivation as the last game and it was got wrong here by a factor of two.
+// A planted foot travels `stance × stride` backwards relative to the machine
+// before it lifts, and stride is two steps, so for the stance to be symmetric
+// about the hinge the foot must plant exactly half of that ahead:
+//
+//     lead = step × stance
+//
+// Half of it, which is what this said, plants the foot a third of the way
+// forward and lets it end up two thirds of the way back — and on a hexapod,
+// whose legs are spread along the body, that put ninety-six feet a frame
+// further from their hinge than the leg was long.
+func lead_of(sp, v) (d) { d = step_of(sp, v) * stance_frac(sp, v) }
+
+// Where a leg's foot wants to be planted, in the world.
+func foot_target(p, sp, li, lead) (tx, tz) {
+    fx := sin(p.hd)
+    fz := cos(p.hd)
+    rx := cos(p.hd)
+    rz := 0.0 - sin(p.hd)
+    // the hinge, carried out to where the leg naturally stands: straight down
+    // and a little outward from where it is bolted on
+    ax := (sp.lm[li].hx - sp.cx) * 1.25
+    az := (sp.lm[li].hz - sp.cz) * 1.25
+    tx = p.x + rx * ax + fx * (az + lead)
+    tz = p.z + rz * ax + fz * (az + lead)
+}
+
+func pose_step(p0, sp, dt, want, tox, toz) (p) {
+    p = p0
+    p.t = p.t + dt
+    if p.down > 0.0 {
+        // KNOCKED OVER. It stays over: a brick robot has no arms to push
+        // itself up with unless the player built some, and standing up is a
+        // mechanism, not an animation.
+        p.down = p.down + dt
+        p.v = 0.0
+        return
+    }
+    // steer
+    if want > 0.001 {
+        d := atan2(tox - p.x, toz - p.z)
+        p.hd = turn_to(p.hd, d, sp.turn * dt)
+    }
+    p.v = approach(p.v, sp.speed * want, sp.speed * 2.0 * dt + 0.01)
+
+    ox := p.x
+    oz := p.z
+    p.x = p.x + sin(p.hd) * p.v * dt
+    p.z = p.z + cos(p.hd) * p.v * dt
+    // ── THE ARENA HAS EDGES ──────────────────────────────────────────────
+    // A machine that wants to be at twenty-five metres and is being closed on
+    // will walk backwards for ever otherwise, which is not cowardice, it is an
+    // unbounded plane. The wall is what makes a long-ranged build have to
+    // commit eventually, and it is the whole reason ranged and close builds
+    // are a rock-paper-scissors rather than a dominance.
+    rr := vlen(p.x, 0.0, p.z)
+    if rr > ARENA() - 1.0 {
+        sc := (ARENA() - 1.0) / rr
+        p.x = p.x * sc
+        p.z = p.z * sc
+    }
+
+    if sp.gait == G_DRIVE() {
+        p.hy = sp.stand
+        return
+    }
+
+    st := stride_of(sp, p.v)
+    if st < 0.02 { st = 0.02 }
+    gone := vlen(p.x - ox, 0.0, p.z - oz)
+    p.phase = p.phase + gone / st
+    while p.phase >= 1.0 {
+        p.phase = p.phase - 1.0
+        p.stepn = p.stepn + 1
+    }
+    p = feet_step(p, sp, st)
+    p = hull_follow(p, sp)
+}
+
+func turn_to(cur, want, step) (o) {
+    d := want - cur
+    while d > PI() { d = d - TAU() }
+    while d < 0.0 - PI() { d = d + TAU() }
+    o = cur
+    if absf(d) <= step { o = want }
+    if absf(d) > step {
+        if d > 0.0 { o = cur + step }
+        if d < 0.0 { o = cur - step }
+    }
+}
+
+func feet_step(p0, sp, st) (p) {
+    p = p0
+    lead := lead_of(sp, p.v)
+    sf := stance_frac(sp, p.v)
+    legi := 0
+    li := 0
+    while li < sp.nlimb {
+        if sp.lm[li].kind == L_LEG() { if sp.lm[li].live == 1 {
+            ph := p.phase + leg_phase(sp, li, legi)
+            while ph >= 1.0 { ph = ph - 1.0 }
+            tx, tz := foot_target(p, sp, li, lead)
+            px := p.fx[li]
+            pz := p.fz[li]
+            py := 0.0
+            if p.fset == 0 { px = tx  pz = tz }
+            if ph < sf {
+                // stance: it does not move
+                p.ox[li] = px - p.x
+                p.oz[li] = pz - p.z
+                if p.sw[li] == 1 { px = tx  pz = tz  p.ox[li] = px - p.x  p.oz[li] = pz - p.z }
+                p.sw[li] = 0
+            } else {
+                // SWING, INTERPOLATED RELATIVE TO THE BODY. The lesson from
+                // the last repo, carried straight over: a foot moves smoothly
+                // with respect to the machine, and its motion through the
+                // world is that sweep plus the machine's travel.
+                u := (ph - sf) / (1.0 - sf)
+                e := smoothf(u)
+                px = p.x + p.ox[li] + (tx - p.x - p.ox[li]) * e
+                pz = p.z + p.oz[li] + (tz - p.z - p.oz[li]) * e
+                py = sin(u * PI()) * (sp.reach * 0.18 + p.v * 0.02)
+                p.sw[li] = 1
+            }
+            p.fx[li] = px
+            p.fy[li] = py
+            p.fz[li] = pz
+            legi = legi + 1
+        } }
+        li = li + 1
+    }
+    p.fset = 1
+}
+
+// ── THE HULL SITS WHERE EVERY LEG CAN REACH IT ───────────────────────────
+// sqrt(L² - d²) over every limb, take the minimum. For two legs that is the
+// humanoid rule from four games ago; for six it is the same line with a longer
+// loop, and the rise and fall of a walking hexapod falls out of it without
+// anybody animating anything.
+func hull_follow(p0, sp) (p) {
+    p = p0
+    hy := sp.stand * 1.4
+    li := 0
+    while li < sp.nlimb {
+        if sp.lm[li].kind == L_LEG() { if sp.lm[li].live == 1 {
+            // where this leg's hinge is in the world
+            hx, hz := hinge_world(p, sp, li)
+            d := vlen(p.fx[li] - hx, 0.0, p.fz[li] - hz)
+            room := sp.lm[li].len * sp.lm[li].len - d * d
+            if room < 0.0 { room = 0.0 }
+            // the hinge sits this far above the hull's own origin
+            cand := sqrt(room) + p.fy[li] - (sp.lm[li].hy - sp.cy)
+            if cand < hy { hy = cand }
+            li = li + 1
+        } else { li = li + 1 } } else { li = li + 1 }
+    }
+    if hy < sp.stand * 0.25 { hy = sp.stand * 0.25 }
+    p.hy = hy
+}
+
+func hinge_world(p, sp, li) (hx, hz) {
+    fx := sin(p.hd)
+    fz := cos(p.hd)
+    rx := cos(p.hd)
+    rz := 0.0 - sin(p.hd)
+    ax := sp.lm[li].hx - sp.cx
+    az := sp.lm[li].hz - sp.cz
+    hx = p.x + rx * ax + fx * az
+    hz = p.z + rz * ax + fz * az
+}
+
+// ── BEING KNOCKED OVER ───────────────────────────────────────────────────
+// One number against another: an impulse against the tipping resistance that
+// `derive` measured from the feet and the centre of mass. A rail gun firing
+// from a narrow chassis produces the impulse itself, which is the join between
+// the build and the fight and the reason a big gun is a decision.
+func pose_topple(p0, sp, impulse) (p) {
+    p = p0
+    if p.down > 0.0 { return }
+    if impulse > sp.tip { p.down = 0.001 }
+}

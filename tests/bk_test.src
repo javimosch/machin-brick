@@ -1,0 +1,369 @@
+// ── what a pile of bricks has to be true of ──────────────────────────────
+// The claim this repo exists to make is that the family's gait rules never
+// needed to know what a body was. That claim is exactly the kind that looks
+// true in a screenshot: a robot walks, therefore it works. So the assertions
+// go at the two things a screenshot cannot show — that the DERIVATION found
+// what is really there, and that it still works after the shape changes.
+
+func okb(cond, nm) (bad) {
+    bad = 0
+    if cond { println("  ok   " + nm) } else { println("  FAIL " + nm)  bad = 1 }
+}
+
+func oki(got, want, nm) (bad) {
+    bad = 0
+    if got == want { println("  ok   " + nm + " (got " + str(got) + ")") }
+    else { println("  FAIL " + nm + " (got " + str(got) + " want " + str(want) + ")")  bad = 1 }
+}
+
+// ── a few machines, built in code ────────────────────────────────────────
+// A helper per shape, because every assertion below needs a robot and typing
+// bricks out at each call site would bury what is being tested.
+func mk_hull(bt0, x0, y0, z0) (bt) {
+    bt = bt0
+    bt = bot_add(bt, x0, y0, z0, P_CORE())
+    bt = bot_add(bt, x0 - 1, y0, z0, P_MOTOR())
+    bt = bot_add(bt, x0 + 1, y0, z0, P_MOTOR())
+    bt = bot_add(bt, x0, y0 + 1, z0, P_BATT())
+    bt = bot_add(bt, x0, y0 + 2, z0, P_GUN())
+}
+
+// a leg: a hinge under (x,z) and a chain of beams down to a foot
+func mk_leg(bt0, x, ytop, z, nseg) (bt) {
+    bt = bt0
+    bt = bot_add(bt, x, ytop, z, P_HINGE())
+    i := 1
+    while i < nseg {
+        bt = bot_add(bt, x, ytop - i, z, P_BEAM())
+        i = i + 1
+    }
+    bt = bot_add(bt, x, ytop - nseg, z, P_FOOT())
+}
+
+func mk_biped() (bt) {
+    bt = bot_new()
+    bt = mk_hull(bt, 7, 6, 7)
+    bt = bot_add(bt, 6, 5, 7, P_BEAM())
+    bt = bot_add(bt, 8, 5, 7, P_BEAM())
+    bt = mk_leg(bt, 6, 4, 7, 3)
+    bt = mk_leg(bt, 8, 4, 7, 3)
+}
+
+func mk_quad() (bt) {
+    bt = bot_new()
+    bt = mk_hull(bt, 7, 6, 7)
+    bt = bot_add(bt, 6, 6, 6, P_BEAM())
+    bt = bot_add(bt, 8, 6, 6, P_BEAM())
+    bt = bot_add(bt, 6, 6, 8, P_BEAM())
+    bt = bot_add(bt, 8, 6, 8, P_BEAM())
+    bt = bot_add(bt, 7, 6, 6, P_BEAM())
+    bt = bot_add(bt, 7, 6, 8, P_BEAM())
+    bt = mk_leg(bt, 6, 5, 6, 3)
+    bt = mk_leg(bt, 8, 5, 6, 3)
+    bt = mk_leg(bt, 6, 5, 8, 3)
+    bt = mk_leg(bt, 8, 5, 8, 3)
+}
+
+func mk_hex() (bt) {
+    bt = bot_new()
+    bt = mk_hull(bt, 7, 6, 7)
+    z := 5
+    while z < 10 {
+        bt = bot_add(bt, 6, 6, z, P_BEAM())
+        bt = bot_add(bt, 7, 6, z, P_BEAM())
+        bt = bot_add(bt, 8, 6, z, P_BEAM())
+        z = z + 1
+    }
+    bt = mk_leg(bt, 6, 5, 5, 2)
+    bt = mk_leg(bt, 8, 5, 5, 2)
+    bt = mk_leg(bt, 6, 5, 7, 2)
+    bt = mk_leg(bt, 8, 5, 7, 2)
+    bt = mk_leg(bt, 6, 5, 9, 2)
+    bt = mk_leg(bt, 8, 5, 9, 2)
+}
+
+// ── IT FINDS WHAT IS THERE ───────────────────────────────────────────────
+func t_derive() (bad) {
+    bad = 0
+    println("what it worked out")
+    b2 := mk_biped()
+    s2 := derive(b2)
+    bad = bad + okb(s2.ok == 1, "a two-legged build is a robot (" + s2.fault + ")")
+    bad = bad + oki(s2.nleg, 2, "and it has two legs")
+    bad = bad + okb(s2.gait == G_BIPED(), "so it walks as a biped")
+
+    b4 := mk_quad()
+    s4 := derive(b4)
+    bad = bad + oki(s4.nleg, 4, "a four-legged build has four")
+    bad = bad + okb(s4.gait == G_TROT(), "and trots")
+
+    b6 := mk_hex()
+    s6 := derive(b6)
+    bad = bad + oki(s6.nleg, 6, "a six-legged build has six")
+    bad = bad + okb(s6.gait == G_TRIPOD(), "and moves on alternating tripods")
+
+    // NOTHING WAS ASSIGNED. The heavier machine is slower, and neither of
+    // those numbers was typed anywhere: one is the sum of the bricks and the
+    // other is torque divided by it.
+    bad = bad + okb(s6.mass > s2.mass, "more bricks weigh more")
+    bad = bad + okb(s6.speed < s2.speed, "and go slower on the same motors")
+
+    // ...and a wide low machine is steadier than a tall narrow one
+    bad = bad + okb(s4.tip > s2.tip, "a wide stance is steadier ("
+                    + str(int(s4.tip)) + " vs " + str(int(s2.tip)) + ")")
+}
+
+// ── THE BUILD RULES ──────────────────────────────────────────────────────
+func t_build() (bad) {
+    bad = 0
+    println("the workshop")
+    bt := bot_new()
+    bad = bad + okb(bot_fault(bt) != "", "an empty grid is not a robot")
+    bt = mk_biped()
+    bad = bad + okb(bot_fault(bt) == "", "a finished one is")
+
+    // one core, whatever the player does
+    n0 := bot_count(bt, P_CORE())
+    bt = bot_add(bt, 3, 3, 3, P_CORE())
+    bad = bad + oki(bot_count(bt, P_CORE()), n0, "there is only ever one core")
+
+    // a brick in mid-air is a fault, not a feature
+    bt2 := mk_biped()
+    bt2 = bot_add(bt2, 12, 12, 12, P_BEAM())
+    bad = bad + okb(bot_fault(bt2) != "", "a brick that touches nothing is caught")
+
+    // MIRRORING: build one side, get the other
+    bt3 := bot_new()
+    bt3 = mk_hull(bt3, 7, 6, 7)
+    bt3 = bot_mirror(bt3, 5, 6, 7, P_BEAM())
+    bad = bad + okb(bot_at(bt3, 5, 6, 7) >= 0, "a mirrored brick lands")
+    bad = bad + okb(bot_at(bt3, mirror_x(5), 6, 7) >= 0, "...and so does its twin")
+    // ...but there is still only one core
+    bt3 = bot_mirror(bt3, 4, 6, 7, P_CORE())
+    bad = bad + oki(bot_count(bt3, P_CORE()), 1, "and the core is not mirrored")
+}
+
+// ── LOSING A LEG ─────────────────────────────────────────────────────────
+// The assertion the whole repo is for.
+func t_shear() (bad) {
+    bad = 0
+    println("losing a leg")
+    bt := mk_quad()
+    sp := derive(bt)
+    bad = bad + oki(sp.nleg, 4, "four legs to start with")
+
+    // shoot the HINGE of one leg: the whole limb should fall off, not just
+    // the brick that was hit
+    hi := bot_at(bt, 6, 5, 6)
+    bad = bad + okb(hi >= 0, "there is a hinge to shoot")
+    before := bot_alive(bt)
+    bt = bot_del(bt, 6, 5, 6)
+    nb, lost := bot_shed(bt)
+    bt = nb
+    bad = bad + okb(lost >= 3, "and the limb goes with it (" + str(lost)
+                    + " bricks shed)")
+    bad = bad + okb(bot_alive(bt) < before - 3, "so the machine is smaller")
+
+    // AND IT IS NOW A DIFFERENT MACHINE. Nobody wrote a three-legged
+    // animation; the gait is worked out again from what is left.
+    sp2 := derive(bt)
+    bad = bad + oki(sp2.nleg, 3, "it is now three-legged")
+    bad = bad + okb(sp2.gait != sp.gait, "so it moves differently ("
+                    + gait_name(sp.gait) + " to " + gait_name(sp2.gait) + ")")
+    bad = bad + okb(sp2.mass < sp.mass, "and it is lighter than it was")
+    bad = bad + okb(sp2.ok == 1, "and it is still a robot")
+
+    // take the rest and it stops being one — which is also derived rather
+    // than being a death rule
+    bt = bot_del(bt, 8, 5, 6)
+    nb2, l2 := bot_shed(bt)
+    bt = nb2
+    bt = bot_del(bt, 6, 5, 8)
+    nb3, l3 := bot_shed(bt)
+    bt = nb3
+    bt = bot_del(bt, 8, 5, 8)
+    nb4, l4 := bot_shed(bt)
+    bt = nb4
+    sp3 := derive(bt)
+    bad = bad + okb(sp3.ok == 0, "with no legs at all it cannot move ("
+                    + sp3.fault + ")")
+    if l2 + l3 + l4 > 0 { }
+}
+
+// ── THE GAIT RULES STILL HOLD, WHATEVER THE LEG COUNT ────────────────────
+// These are the same properties the humanoid games assert, run against three
+// machines the rules were never written for.
+func t_walk() (bad) {
+    bad = 0
+    println("walking on two, four and six")
+    n := 0
+    while n < 3 {
+        bt := mk_biped()
+        if n == 1 { bt = mk_quad() }
+        if n == 2 { bt = mk_hex() }
+        sp := derive(bt)
+        p := pose_new(sp)
+        // let it settle, then measure a few seconds of walking
+        i := 0
+        while i < 120 { p = pose_step(p, sp, 0.016666, 1.0, 0.0, 100.0)  i = i + 1 }
+        settled := p.hy
+        lo := 99.0
+        slide := 0.0
+        over := 0
+        i = 0
+        while i < 300 {
+            sf := stance_frac(sp, p.v)
+            was := []float{}
+            wasz := []float{}
+            li := 0
+            while li < sp.nlimb {
+                was = append(was, p.fx[li])
+                wasz = append(wasz, p.fz[li])
+                li = li + 1
+            }
+            legi := 0
+            downs := []int{}
+            li = 0
+            while li < sp.nlimb {
+                dn := 0
+                if sp.lm[li].kind == L_LEG() {
+                    ph := p.phase + leg_phase(sp, li, legi)
+                    while ph >= 1.0 { ph = ph - 1.0 }
+                    if ph < sf { dn = 1 }
+                    legi = legi + 1
+                }
+                downs = append(downs, dn)
+                li = li + 1
+            }
+            p = pose_step(p, sp, 0.016666, 1.0, 0.0, 100.0)
+            // A PLANTED FOOT DOES NOT MOVE. The first rule, on a body the
+            // rule was not written for.
+            li = 0
+            while li < sp.nlimb {
+                if downs[li] == 1 {
+                    sf2 := stance_frac(sp, p.v)
+                    legj := 0
+                    lk := 0
+                    while lk < li {
+                        if sp.lm[lk].kind == L_LEG() { legj = legj + 1 }
+                        lk = lk + 1
+                    }
+                    ph2 := p.phase + leg_phase(sp, li, legj)
+                    while ph2 >= 1.0 { ph2 = ph2 - 1.0 }
+                    if ph2 < sf2 {
+                        dd := vlen(p.fx[li] - was[li], 0.0, p.fz[li] - wasz[li])
+                        if dd > slide { slide = dd }
+                    }
+                }
+                li = li + 1
+            }
+            if p.hy < lo { lo = p.hy }
+            // ...AND NO LEG IS EVER LONGER THAN IT IS.
+            li = 0
+            while li < sp.nlimb {
+                if sp.lm[li].kind == L_LEG() {
+                    hx, hz := hinge_world(p, sp, li)
+                    d := vlen(p.fx[li] - hx, 0.0, p.fz[li] - hz)
+                    if d > sp.lm[li].len * 1.02 { over = over + 1 }
+                }
+                li = li + 1
+            }
+            i = i + 1
+        }
+        nm := "biped"
+        if n == 1 { nm = "quadruped" }
+        if n == 2 { nm = "hexapod" }
+        bad = bad + okb(slide < 0.0005, nm + ": a planted foot does not slide ("
+                        + str(slide) + " m)")
+        bad = bad + oki(over, 0, nm + ": and no leg over-reaches")
+        // NOT AGAINST A CONSTANT. `p.hy` is the height of the CENTRE OF MASS,
+        // and a squat hexapod's is genuinely a quarter of a biped's — the
+        // property worth asserting is that it does not sink from wherever its
+        // own build put it, which is the same rule for all three.
+        bad = bad + okb(lo > settled * 0.72, nm + ": and it does not sink ("
+                        + str(int(lo * 100.0)) + " of " + str(int(settled * 100.0))
+                        + " cm)")
+        bad = bad + okb(p.v > 0.2, nm + ": and it actually moves")
+        n = n + 1
+    }
+}
+
+// ── RECOIL IS A BUILD PROBLEM ────────────────────────────────────────────
+func t_recoil() (bad) {
+    bad = 0
+    println("recoil")
+    // the same rail gun on two chassis: one wide and low, one tall and narrow
+    wide := mk_quad()
+    wide = bot_add(wide, 7, 8, 7, P_RAIL())
+    sw := derive(wide)
+    tall := mk_biped()
+    tall = bot_add(tall, 7, 9, 7, P_BEAM())
+    tall = bot_add(tall, 7, 10, 7, P_BEAM())
+    tall = bot_add(tall, 7, 11, 7, P_RAIL())
+    st := derive(tall)
+    bad = bad + okb(sw.tip > st.tip, "a wide chassis is harder to knock over ("
+                    + str(int(sw.tip)) + " vs " + str(int(st.tip)) + ")")
+
+    // fire it: the impulse is the same, the machines are not
+    pw := pose_new(sw)
+    pt := pose_new(st)
+    imp := wep_recoil(P_RAIL()) * 1.6
+    pw = pose_topple(pw, sw, imp)
+    pt = pose_topple(pt, st, imp)
+    bad = bad + okb(pt.down > 0.0, "the tall one falls over firing its own gun")
+    bad = bad + okb(pw.down == 0.0, "and the wide one does not")
+}
+
+// ── THE FIGHT RESOLVES ───────────────────────────────────────────────────
+func t_fight() (bad) {
+    bad = 0
+    println("the arena")
+    a := mk_quad()
+    a = bot_add(a, 7, 8, 7, P_GUN())
+    b := mk_biped()
+    b = bot_add(b, 7, 9, 7, P_GUN())
+    wins := 0
+    draws := 0
+    i := 0
+    while i < 5 {
+        wn, secs := sim_fight(a, b, i * 13 + 1, 60.0)
+        if wn < 0 { draws = draws + 1 }
+        if wn >= 0 { wins = wins + 1 }
+        if secs > 60.5 { bad = bad + okb(0 == 1, "a fight cannot run over time") }
+        i = i + 1
+    }
+    bad = bad + okb(wins > 2, "most fights end in a result (" + str(wins) + "/5)")
+
+    // A FIGHT IS DETERMINISTIC given its seed, which is what makes balancing
+    // ten opponents possible at all.
+    w1, s1 := sim_fight(a, b, 99, 60.0)
+    w2, s2 := sim_fight(a, b, 99, 60.0)
+    bad = bad + okb(w1 == w2, "the same fight twice has the same winner")
+    bad = bad + okb(absf(s1 - s2) < 0.001, "...at the same moment")
+
+    // ...and a robot with no weapon loses to one with a weapon, every time,
+    // which is the floor under the whole design
+    unarmed := mk_quad()
+    j := 0
+    while j < unarmed.n {
+        if is_weapon(unarmed.b[j].kind) == 1 { unarmed.b[j].live = 0 }
+        j = j + 1
+    }
+    wu, su := sim_fight(unarmed, b, 5, 60.0)
+    bad = bad + okb(wu == 1, "an unarmed robot loses")
+    if su > 0.0 { }
+}
+
+func main() {
+    bad := 0
+    println("")
+    bad = bad + t_derive()
+    bad = bad + t_build()
+    bad = bad + t_shear()
+    bad = bad + t_walk()
+    bad = bad + t_recoil()
+    bad = bad + t_fight()
+    println("")
+    if bad == 0 { println("ALL PASS") } else { println(str(bad) + " FAILED") }
+    exit(bad)
+}

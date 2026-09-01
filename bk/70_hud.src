@@ -1,0 +1,98 @@
+// ── the readouts ─────────────────────────────────────────────────────────
+// The builder's HUD has one job that matters: show what the machine BECAME.
+// The player places bricks; the interesting information is what those bricks
+// added up to, and if the derivation is invisible the game is just stacking.
+
+func stat_row(nm, val, x, y, hot) {
+    c := col(150, 162, 182)
+    if hot == 1 { c = col(232, 200, 130) }
+    DrawText(nm, x, y, 11, col(104, 116, 136))
+    DrawText(val, x + 104, y - 2, 15, c)
+}
+
+func spec_panel(sp, x, y) {
+    DrawRectangle(x - 10, y - 10, 258, 250, col_a(14, 16, 21, 210))
+    DrawText("WHAT YOU BUILT", x, y, 15, col(150, 210, 235))
+    if sp.ok == 0 {
+        DrawText(sp.fault, x, y + 24, 13, col(240, 130, 110))
+        return
+    }
+    stat_row("gait", gait_name(sp.gait), x, y + 30, 1)
+    stat_row("legs", str(sp.nleg) + " legs  " + str(sp.narm) + " arms", x, y + 50, 0)
+    stat_row("mass", str(int(sp.mass)) + " kg", x, y + 70, 0)
+    stat_row("speed", str(int(sp.speed * 10.0)) + " dm/s", x, y + 90, 0)
+    stat_row("turn", str(int(sp.turn * 57.0)) + " deg/s", x, y + 110, 0)
+    stat_row("steadiness", str(int(sp.tip)), x, y + 130, 0)
+    stat_row("armour", str(int(sp.hp)), x, y + 150, 0)
+    stat_row("damage", str(int(sp.dps * 10.0)) + " /10s", x, y + 170, 0)
+    stat_row("reach", str(int(sp.rmax)) + " m", x, y + 190, 0)
+    pw := str(int(sp.power)) + " / " + str(int(sp.draw)) + " W"
+    hot := 0
+    if sp.draw > sp.power { hot = 1 }
+    stat_row("power", pw, x, y + 210, hot)
+}
+
+// The palette: which brick the hand is holding.
+func palette_draw(sel) {
+    y := H() - 74
+    DrawRectangle(0, y - 8, W(), 82, col_a(14, 16, 21, 215))
+    k := 1
+    while k < P_N() {
+        x := 18 + (k - 1) * 118
+        r, g, b := part_col(k)
+        if k == sel {
+            DrawRectangle(x - 6, y - 4, 108, 56, col_a(232, 200, 130, 190))
+        }
+        DrawRectangle(x, y, 22, 22, col(r, g, b))
+        DrawText(part_name(k), x + 28, y + 2, 11, col(196, 206, 222))
+        DrawText(str(int(part_mass(k))) + " kg", x + 28, y + 16, 10, col(112, 124, 144))
+        DrawText(str(k), x + 2, y + 26, 10, col(30, 34, 40))
+        k = k + 1
+    }
+}
+
+func build_hud(sp, sel, mirror, nb) {
+    DrawRectangle(0, 0, W(), 40, col_a(12, 14, 19, 215))
+    DrawText("machin-brick", 14, 6, 18, col(150, 196, 214))
+    DrawText("the walk falls out of what you build", 14, 25, 10, col(92, 104, 124))
+    DrawText("bricks", 250, 4, 10, col(104, 116, 136))
+    DrawText(str(nb), 250, 18, 15, col(226, 232, 240))
+    DrawText("mirror", 330, 4, 10, col(104, 116, 136))
+    mc := col(120, 132, 152)
+    ms := "off"
+    if mirror == 1 { mc = col(150, 226, 160)  ms = "on" }
+    DrawText(ms, 330, 18, 15, mc)
+    spec_panel(sp, 16, 60)
+    palette_draw(sel)
+    DrawText("click place · right-click remove · 1-9,0,- pick brick · X mirror"
+             + " · [ ] layer · S save · TAB fight · drag orbit · ESC",
+             14, H() - 92, 12, col_a(150, 200, 235, 210))
+}
+
+func bar(x, y, w, h, f, r, g, b) {
+    DrawRectangle(x, y, w, h, col_a(10, 12, 16, 200))
+    DrawRectangle(x, y, int(float(w) * clampf(f, 0.0, 1.0)), h, col(r, g, b))
+}
+
+func fight_hud(fa, fb, tris, fps, over) {
+    DrawRectangle(0, 0, W(), 40, col_a(12, 14, 19, 215))
+    DrawText("machin-brick", 14, 6, 18, col(150, 196, 214))
+    DrawText("yours", 240, 4, 10, col(104, 116, 136))
+    bar(240, 18, 220, 12, fa.hp / fa.hp0, 120, 196, 226)
+    DrawText(str(bot_alive(fa.bt)) + " bricks · " + gait_name(fa.sp.gait),
+             240, 34, 10, col(140, 156, 180))
+    DrawText("theirs", 520, 4, 10, col(104, 116, 136))
+    bar(520, 18, 220, 12, fb.hp / fb.hp0, 226, 130, 110)
+    DrawText(str(bot_alive(fb.bt)) + " bricks · " + gait_name(fb.sp.gait),
+             520, 34, 10, col(180, 148, 140))
+    DrawText("triangles", 800, 4, 10, col(104, 116, 136))
+    DrawText(str(tris), 800, 18, 15, col(226, 232, 240))
+    DrawText("fps", 920, 4, 10, col(104, 116, 136))
+    DrawText(str(fps), 920, 18, 15, col(150, 226, 160))
+    if over != "" {
+        DrawRectangle(W() / 2 - 180, H() / 2 - 40, 360, 80, col_a(14, 18, 24, 235))
+        DrawText(over, W() / 2 - 150, H() / 2 - 16, 28, col(232, 216, 150))
+    }
+    DrawText("TAB back to the workshop · SPACE pause · R rematch · ESC",
+             14, H() - 24, 12, col_a(150, 200, 235, 210))
+}

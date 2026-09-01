@@ -1,0 +1,142 @@
+// ── the catalogue ────────────────────────────────────────────────────────
+// Nine kinds of brick, and every one of them is one cell. Real Technic has
+// beams of six lengths and that is a better toy; one cell is a better POC,
+// because connectivity, damage and the kinematic derivation all become the
+// same trivial operation on a grid, and the silhouette still reads as bricks
+// because a brick is drawn with a stud on top.
+//
+// WHAT A PART IS NOT: a bundle of stats. Nothing here says "speed" or
+// "accuracy" — those are measured off the assembled robot in 30_derive.src.
+// A part says how heavy it is, how much it can take, and what it DOES, and
+// everything else is a consequence of where the player put it.
+
+func P_NONE() (v)   { v = 0 }
+func P_CORE() (v)   { v = 1 }   // the root. one per robot; lose it and you lose
+func P_BEAM() (v)   { v = 2 }   // structure, light
+func P_ARMOUR() (v) { v = 3 }   // structure, heavy, takes a lot
+func P_HINGE() (v)  { v = 4 }   // a joint — this is what makes a limb a limb
+func P_FOOT() (v)   { v = 5 }   // ground contact: a limb ending in one is a LEG
+func P_WHEEL() (v)  { v = 6 }   // ...or it rolls instead
+func P_MOTOR() (v)  { v = 7 }   // torque, which is what moves the mass
+func P_BATT() (v)   { v = 8 }   // power, which is what fires the guns
+func P_GUN() (v)    { v = 9 }   // autocannon: fast, light, little recoil
+func P_RAIL() (v)   { v = 10 }  // rail gun: slow, heavy, huge recoil
+func P_ROCKET() (v) { v = 11 }  // arcs over cover, slow, wide
+func P_N() (v)      { v = 12 }
+
+func part_name(k) (nm) {
+    nm = "-"
+    if k == P_CORE() { nm = "core" }
+    if k == P_BEAM() { nm = "beam" }
+    if k == P_ARMOUR() { nm = "armour" }
+    if k == P_HINGE() { nm = "hinge" }
+    if k == P_FOOT() { nm = "foot" }
+    if k == P_WHEEL() { nm = "wheel" }
+    if k == P_MOTOR() { nm = "motor" }
+    if k == P_BATT() { nm = "battery" }
+    if k == P_GUN() { nm = "cannon" }
+    if k == P_RAIL() { nm = "rail gun" }
+    if k == P_ROCKET() { nm = "rockets" }
+}
+
+// Kilograms a brick. The spread is the whole reason a build is a decision:
+// armour is four times a beam, and the mass is what the motors have to move.
+func part_mass(k) (m) {
+    m = 1.0
+    if k == P_CORE() { m = 6.0 }
+    if k == P_BEAM() { m = 1.0 }
+    if k == P_ARMOUR() { m = 4.2 }
+    if k == P_HINGE() { m = 1.6 }
+    if k == P_FOOT() { m = 1.8 }
+    if k == P_WHEEL() { m = 2.2 }
+    if k == P_MOTOR() { m = 3.4 }
+    if k == P_BATT() { m = 2.6 }
+    if k == P_GUN() { m = 2.8 }
+    if k == P_RAIL() { m = 6.5 }
+    if k == P_ROCKET() { m = 3.6 }
+}
+
+func part_hp(k) (h) {
+    h = 10.0
+    if k == P_CORE() { h = 26.0 }
+    if k == P_BEAM() { h = 8.0 }
+    if k == P_ARMOUR() { h = 34.0 }
+    if k == P_HINGE() { h = 9.0 }
+    if k == P_FOOT() { h = 12.0 }
+    if k == P_WHEEL() { h = 12.0 }
+    if k == P_MOTOR() { h = 11.0 }
+    if k == P_BATT() { h = 9.0 }
+    if k == P_GUN() { h = 10.0 }
+    if k == P_RAIL() { h = 14.0 }
+    if k == P_ROCKET() { h = 10.0 }
+}
+
+// Newton-metres of torque a motor contributes, and watts a battery does.
+func part_torque(k) (t) { t = 0.0  if k == P_MOTOR() { t = 34.0 } }
+func part_power(k) (p)  { p = 0.0  if k == P_BATT() { p = 22.0 } }
+
+func is_weapon(k) (o) {
+    o = 0
+    if k == P_GUN() { o = 1 }
+    if k == P_RAIL() { o = 1 }
+    if k == P_ROCKET() { o = 1 }
+}
+
+// ── what a weapon does ───────────────────────────────────────────────────
+// Range, damage, seconds between shots, recoil impulse and spread. RECOIL IS
+// THE INTERESTING ONE: it is an impulse applied at the gun's own position, so
+// a rail gun bolted high on a narrow chassis topples the robot that fires it.
+// That is not a rule anybody wrote — it is `30_derive.src` measuring where the
+// brick is and `40_gait.src` deciding whether the feet can hold it.
+func wep_range(k) (r) {
+    r = 0.0
+    if k == P_GUN() { r = 14.0 }
+    if k == P_RAIL() { r = 30.0 }
+    if k == P_ROCKET() { r = 22.0 }
+}
+func wep_dmg(k) (d) {
+    d = 0.0
+    if k == P_GUN() { d = 5.2 }
+    if k == P_RAIL() { d = 22.0 }
+    if k == P_ROCKET() { d = 12.0 }
+}
+func wep_cool(k) (c) {
+    c = 1.0
+    if k == P_GUN() { c = 0.34 }
+    if k == P_RAIL() { c = 2.6 }
+    if k == P_ROCKET() { c = 1.7 }
+}
+func wep_recoil(k) (r) {
+    r = 0.0
+    if k == P_GUN() { r = 0.9 }
+    if k == P_RAIL() { r = 26.0 }
+    if k == P_ROCKET() { r = 4.0 }
+}
+func wep_spread(k) (s) {
+    s = 0.0
+    if k == P_GUN() { s = 0.045 }
+    if k == P_RAIL() { s = 0.012 }
+    if k == P_ROCKET() { s = 0.075 }
+}
+// watts to fire: a robot with more guns than batteries fires slower
+func wep_draw(k) (p) {
+    p = 0.0
+    if k == P_GUN() { p = 6.0 }
+    if k == P_RAIL() { p = 30.0 }
+    if k == P_ROCKET() { p = 14.0 }
+}
+
+func part_col(k) (r, g, b) {
+    r = 190  g = 190  b = 190
+    if k == P_CORE() { r = 232  g = 176  b = 60 }
+    if k == P_BEAM() { r = 178  g = 182  b = 190 }
+    if k == P_ARMOUR() { r = 96  g = 108  b = 124 }
+    if k == P_HINGE() { r = 232  g = 96  b = 72 }
+    if k == P_FOOT() { r = 62  g = 68  b = 78 }
+    if k == P_WHEEL() { r = 44  g = 46  b = 52 }
+    if k == P_MOTOR() { r = 120  g = 196  b = 128 }
+    if k == P_BATT() { r = 96  g = 168  b = 226 }
+    if k == P_GUN() { r = 208  g = 208  b = 214 }
+    if k == P_RAIL() { r = 168  g = 130  b = 224 }
+    if k == P_ROCKET() { r = 226  g = 132  b = 96 }
+}
