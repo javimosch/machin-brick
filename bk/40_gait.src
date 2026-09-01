@@ -39,6 +39,13 @@ type Pose struct {
     oz    []float
     sw    []int            // was it in swing last frame
     fset  int
+    // WHERE THE GUNS ARE POINTED, which is not where the machine is walking.
+    // A robot that circles its enemy turns its hull to face where it is going,
+    // and if firing is gated on the hull's heading it circles for ever without
+    // shooting — which is exactly what it did. The guns get their own bearing
+    // and a limit on how far round they will go, so flanking still means
+    // something.
+    aim   float
     // the hull, resolved
     hy    float
     roll  float
@@ -46,6 +53,8 @@ type Pose struct {
     // knocked over
     down  float
 }
+
+func TURRET() (v) { v = 2.1 }        // how far off the hull the guns will train
 
 func pose_new(sp) (p) {
     p = Pose{}
@@ -163,6 +172,19 @@ func foot_target(p, sp, li, lead) (tx, tz) {
     az := (sp.lm[li].hz - sp.cz) * 1.25
     tx = p.x + rx * ax + fx * (az + lead)
     tz = p.z + rz * ax + fz * (az + lead)
+}
+
+// Train the guns on something, within the arc the hull allows.
+func pose_aim(p0, sp, ex, ez, dt) (p) {
+    p = p0
+    bear := atan2(ex - p.x, ez - p.z)
+    p.aim = turn_to(p.aim, bear, (sp.turn * 2.2 + 1.4) * dt)
+    // ...and the hull drags the turret round with it when it runs out of arc
+    off := p.aim - p.hd
+    while off > PI() { off = off - TAU() }
+    while off < 0.0 - PI() { off = off + TAU() }
+    if off > TURRET() { p.aim = p.hd + TURRET() }
+    if off < 0.0 - TURRET() { p.aim = p.hd - TURRET() }
 }
 
 func pose_step(p0, sp, dt, want, tox, toz) (p) {

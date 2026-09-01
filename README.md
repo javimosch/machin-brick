@@ -4,7 +4,7 @@ Build a robot out of bricks. **The walk falls out of what you built.**
 
 ```
 ./build.sh              build bin/brick
-./build.sh test         45 headless assertions, no window
+./build.sh test         51 headless assertions, no window
 ./bin/brick             the workshop; TAB to fight
 ./bin/brick --spec      what a build added up to
 ./bin/brick --sim 9     nine battles, no window
@@ -112,6 +112,53 @@ this correctly in the previous repo, written it in that README, and then halved
 it here. The assertion caught it in a second; watching would have taken an
 afternoon and probably found the wrong cause.
 
+## Four bugs, and two of them were one `=`
+
+The first build shipped with four faults, and the interesting thing is how
+little they looked like each other:
+
+- **every battle after the first was an instant win**
+- **the enemy sometimes spawned lying on the floor**
+- **they sometimes circled each other for ever without shooting**
+- **and a fight that nobody won never ended**
+
+The first two are the same bug. A `Bot` is a slice of bricks, and **slices
+alias**: `f.bt = bt0` copies the struct and shares the bricks, so a fight
+fought *with* a robot takes bricks off the robot itself. The second battle was
+between two wrecks — and a wreck with no legs is marked down at birth, which is
+a machine lying on the floor. One assignment, two symptoms, neither pointing
+anywhere near the cause. This family has now been caught by slice aliasing
+twice, in two repos, and the assertion that catches the class is the same shape
+both times: **fight with a robot and the robot is unchanged.** It has to build
+fresh machines to measure, or it is checking bots that the tests above already
+took apart — which is how the first version of it passed on the broken code.
+
+The circling was a design bug rather than a slip. Firing was gated on the
+**hull's** heading, and a robot that circles its enemy turns to face where it
+is *going* — so it was always ninety degrees off its own target and never fired.
+The guns now have their own bearing, tracked toward the enemy and limited to
+±120° of the hull, which is also what will make flanking mean something later.
+
+And a duel needs a clock. Ninety seconds and it is a draw — a real result,
+because it means neither build can finish the other, which is a fact about the
+designs worth being told. A machine that has lost every weapon has also lost,
+even while it is still walking: it cannot affect the outcome any more.
+
+## The editor could not be rotated
+
+Because the left button places a brick and the right one takes it away, so
+neither of them could also mean "look around". Middle-drag orbits now, `Q`/`E`
+turn and `R`/`F` pitch, and in the arena the left button orbits too since
+nothing else wants it.
+
+Two more things made it feel broken. The build layer is a horizontal plane
+somewhere in mid-air with a ghost brick floating on it, and **nothing was drawn
+at that height** — so placing anything above the ground was guesswork; there is
+a frame at the layer now. And `brick_limb` worked out the hull separately for
+every brick it was asked about, which made drawing a robot cubic in its brick
+count: a thirty-brick machine cost a quarter of a million grid lookups a frame.
+The hull is flooded once per draw.
+
 ## Damage is brick removal
 
 A shot takes apart the brick nearest where it landed. Then the connectivity
@@ -143,7 +190,7 @@ hundred fights in a second rather than one that somebody sat through.
 
 ## What is asserted
 
-Forty-five headless assertions, at the two things a screenshot cannot show:
+Fifty-one headless assertions, at the two things a screenshot cannot show:
 that the derivation found what is really there, and that it still works after
 the shape changes.
 

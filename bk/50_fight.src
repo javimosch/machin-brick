@@ -22,7 +22,9 @@ type Fighter struct {
 
 func fighter_new(bt0, side, x, z, hd) (f) {
     f = Fighter{}
-    f.bt = bt0
+    // ITS OWN COPY. See the note over `bot_copy`: a fight takes bricks apart,
+    // and the thing it takes apart must not be the player's robot.
+    f.bt = bot_copy(bt0)
     f.sp = derive(bt0)
     f.p = pose_new(f.sp)
     f.p.x = x
@@ -37,6 +39,18 @@ func fighter_new(bt0, side, x, z, hd) (f) {
     }
     f.hp = f.sp.hp
     f.hp0 = f.sp.hp
+    f.p.aim = hd
+    // ── IT SPAWNS STANDING UP ────────────────────────────────────────────
+    // `pose_new` guesses the ride height from the leg length; the feet decide
+    // it. Without one settling step the machine is drawn for its first frame
+    // at the guess — and for a build whose guess is wrong, that is a robot
+    // lying on the floor until it takes its first pace.
+    if f.sp.ok == 1 {
+        f.p = feet_step(f.p, f.sp, 0.5)
+        f.p = hull_follow(f.p, f.sp)
+    }
+    // ...and a build that cannot stand does not pretend to
+    if f.sp.ok == 0 { f.p.down = 0.001 }
 }
 
 // A brick's position in the world, given the pose. Legs swing with their limb;
@@ -91,12 +105,12 @@ func fire_step(fa0, fb0, bolts0, dt, tick) (fa, fb, bolts) {
     fa = fa0
     fb = fb0
     bolts = bolts0
-    if fa.p.down > 3.0 { return }
+    if fa.p.down > 0.0 { return }
     dx := fb.p.x - fa.p.x
     dz := fb.p.z - fa.p.z
     d := sqrt(dx * dx + dz * dz)
     ang := atan2(dx, dz)
-    off := ang - fa.p.hd
+    off := ang - fa.p.aim
     while off > PI() { off = off - TAU() }
     while off < 0.0 - PI() { off = off + TAU() }
 
@@ -159,8 +173,14 @@ func fire_step(fa0, fb0, bolts0, dt, tick) (fa, fb, bolts) {
 // the robot's next step is worked out from what is left.
 func bolt_hit(f0, bl, salt) (f) {
     f = f0
+    // ── A MISS IS A MISS ─────────────────────────────────────────────────
+    // The bolt takes the brick nearest where it landed, but only if that is
+    // within about two brick-widths. At the metre and a half this started at,
+    // a shot that sailed clean past the machine still found the nearest brick
+    // to it — every weapon was perfectly accurate, spread did nothing, armour
+    // did nothing, and a fight was over in two seconds.
     best := 0 - 1
-    bd := 1.6
+    bd := 0.34
     i := 0
     while i < f.bt.n {
         if f.bt.b[i].live == 1 {
@@ -279,6 +299,41 @@ func think(f0, e, dt) (f, want, tx, tz) {
 // Returns who won and how long it took. A draw is a real outcome and it is
 // usually a bug in a build rather than in the game — two machines that cannot
 // reach each other.
+// ── CAN THIS MACHINE STILL DO ANYTHING? ──────────────────────────────────
+// A robot with no weapon left cannot win, and one that can neither move nor
+// shoot is finished whatever its brick count says. Both are derived rather
+// than being death rules, and together they are what stops two wrecks circling
+// each other until the heat death of the universe.
+func can_fight(f) (o) {
+    o = 0
+    i := 0
+    while i < f.bt.n {
+        if f.bt.b[i].live == 1 { if is_weapon(f.bt.b[i].kind) == 1 { o = 1 } }
+        i = i + 1
+    }
+}
+
+func can_move(f) (o) {
+    o = 0
+    if f.sp.ok == 1 { if f.p.down == 0.0 { o = 1 } }
+}
+
+// Who has won, or -1 if it is still going. A machine that can no longer shoot
+// has lost even if it is still walking, which is the honest reading: it cannot
+// affect the outcome any more.
+func verdict(fa, fb) (w) {
+    w = 0 - 1
+    da := 0
+    db := 0
+    if fighter_dead(fa) == 1 { da = 1 }
+    if fighter_dead(fb) == 1 { db = 1 }
+    if can_fight(fa) == 0 { da = 1 }
+    if can_fight(fb) == 0 { db = 1 }
+    if da == 1 { if db == 1 { w = 2  return } }
+    if db == 1 { w = 0  return }
+    if da == 1 { w = 1 }
+}
+
 func sim_fight(bta, btb, seed, maxt) (winner, secs) {
     winner = 0 - 1
     secs = 0.0
@@ -294,6 +349,8 @@ func sim_fight(bta, btb, seed, maxt) (winner, secs) {
         wb, wantb, bx, bz := think(fb, fa, dt)
         fa = wa
         fb = wb
+        fa.p = pose_aim(fa.p, fa.sp, fb.p.x, fb.p.z, dt)
+        fb.p = pose_aim(fb.p, fb.sp, fa.p.x, fa.p.z, dt)
         fa.p = pose_step(fa.p, fa.sp, dt, wanta, ax, az)
         fb.p = pose_step(fb.p, fb.sp, dt, wantb, bx, bz)
         fa, fb, bolts = fire_step(fa, fb, bolts, dt, tick)
@@ -301,8 +358,10 @@ func sim_fight(bta, btb, seed, maxt) (winner, secs) {
         bolts = bolts_age(bolts, dt)
         tick = tick + 1
         secs = secs + dt
-        if fighter_dead(fb) == 1 { winner = 0  return }
-        if fighter_dead(fa) == 1 { winner = 1  return }
+        v := verdict(fa, fb)
+        if v == 0 { winner = 0  return }
+        if v == 1 { winner = 1  return }
+        if v == 2 { winner = 2  return }
     }
 }
 

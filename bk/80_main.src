@@ -104,6 +104,7 @@ func main() {
     drag := 0
     paused := 0
     over := ""
+    clock := 0.0
 
     InitWindow(W(), H(), "machin-brick")
     SetTargetFPS(60)
@@ -121,13 +122,34 @@ func main() {
         if IsKeyPressed(K_ESC()) { break }
         if IsKeyPressed(K_F11()) { ToggleBorderlessWindowed() }
 
-        // camera, shared by both modes
-        if IsMouseButtonDown(1) == false { }
+        // ── THE CAMERA ───────────────────────────────────────────────────
+        // Middle-drag orbits, everywhere. In the workshop the left button
+        // places a brick and the right one takes it away, so neither of them
+        // can also mean "look around" — which is why there was no way to
+        // rotate at all. In the arena nothing else wants the left button, so
+        // it orbits there too.
+        orb := 0
+        if IsMouseButtonDown(2) { orb = 1 }
+        if mode == M_FIGHT() { if IsMouseButtonDown(0) { orb = 1 } }
+        if orb == 1 {
+            if drag == 1 {
+                camyaw = camyaw - float(GetMouseX() - mx0) * 0.009
+                campit = clampf(campit + float(GetMouseY() - my0) * 0.007,
+                                0.06, 1.45)
+            }
+            drag = 1
+            mx0 = GetMouseX()
+            my0 = GetMouseY()
+        } else { drag = 0 }
         wheel := clampf(GetMouseWheelMove(), 0.0 - 1.0, 1.0)
         if mode == M_BUILD() { camd = clampf(camd - wheel * 0.4, 1.6, 9.0) }
         if mode == M_FIGHT() { camd = clampf(camd - wheel * 1.2, 6.0, 40.0) }
-        if IsKeyDown(K_Q()) { camyaw = camyaw - dt * 1.4 }
-        if IsKeyDown(K_E()) { camyaw = camyaw + dt * 1.4 }
+        if IsKeyDown(K_Q()) { camyaw = camyaw - dt * 1.5 }
+        if IsKeyDown(K_E()) { camyaw = camyaw + dt * 1.5 }
+        if IsKeyDown(K_R()) { if mode == M_BUILD() {
+            campit = clampf(campit + dt * 1.1, 0.06, 1.45)
+        } }
+        if IsKeyDown(K_F()) { campit = clampf(campit - dt * 1.1, 0.06, 1.45) }
 
         if IsKeyPressed(K_TAB()) {
             if mode == M_BUILD() {
@@ -136,6 +158,7 @@ func main() {
                 fb = fighter_new(fo, 1, 7.0, 0.0, PI())
                 bolts = []Bolt{}
                 over = ""
+                clock = 0.0
                 camd = 16.0
             } else {
                 mode = M_BUILD()
@@ -198,24 +221,38 @@ func main() {
 
         if mode == M_FIGHT() {
             if IsKeyPressed(K_SPACE()) { paused = 1 - paused }
-            if IsKeyPressed(K_R()) {
+            if IsKeyPressed(K_T()) {
                 fa = fighter_new(bt, 0, 0.0 - 7.0, 0.0, 0.0)
                 fb = fighter_new(fo, 1, 7.0, 0.0, PI())
                 bolts = []Bolt{}
                 over = ""
+                clock = 0.0
             }
             if paused == 0 { if over == "" {
+                clock = clock + dt
                 wa, wanta, ax, az := think(fa, fb, dt)
                 wb, wantb, bx, bz := think(fb, fa, dt)
                 fa = wa
                 fb = wb
+                // THE GUNS TRACK, THE HULL WALKS. Two bearings, and the fight
+                // stopped being two machines circling each other for ever.
+                fa.p = pose_aim(fa.p, fa.sp, fb.p.x, fb.p.z, dt)
+                fb.p = pose_aim(fb.p, fb.sp, fa.p.x, fa.p.z, dt)
                 fa.p = pose_step(fa.p, fa.sp, dt, wanta, ax, az)
                 fb.p = pose_step(fb.p, fb.sp, dt, wantb, bx, bz)
                 fa, fb, bolts = fire_step(fa, fb, bolts, dt, frame)
                 fb, fa, bolts = fire_step(fb, fa, bolts, dt, frame + 7)
                 bolts = bolts_age(bolts, dt)
-                if fighter_dead(fb) == 1 { over = "you win" }
-                if fighter_dead(fa) == 1 { over = "you lose" }
+                // ── AND IT ENDS ──────────────────────────────────────────
+                v := verdict(fa, fb)
+                if v == 0 { over = "you win" }
+                if v == 1 { over = "you lose" }
+                if v == 2 { over = "mutual wreck" }
+                // ...on the clock if not on the field. A duel that has gone
+                // ninety seconds is a draw, and a draw is a real result: it
+                // means neither build can finish the other, which is a fact
+                // about the designs worth being told.
+                if clock > 90.0 { if over == "" { over = "time — a draw" } }
             } }
         }
 
@@ -225,11 +262,13 @@ func main() {
         tris := 0
         if mode == M_BUILD() {
             tris = grid_draw()
-            gf := fighter_new(bt, 0, cw(GX() / 2), cw(GZ() / 2), 0.0)
-            gf.p.hy = 0.0
-            gf.p.x = 0.0
-            gf.p.z = 0.0
-            // in the workshop it stands where it was built, not where it walks
+            // ── WHERE THE NEXT BRICK WILL GO ─────────────────────────────
+            // The layer is a horizontal plane somewhere in mid-air and the
+            // ghost brick floats on it. With nothing drawn AT that height
+            // there is no way to judge where the plane is, which made placing
+            // anything above the first layer guesswork — the single worst
+            // thing about the editor.
+            if layer > 0 { tris = tris + layer_draw(layer) }
             i := 0
             while i < bt.n {
                 if bt.b[i].live == 1 {
@@ -266,7 +305,7 @@ func main() {
         EndMode3D()
 
         if mode == M_BUILD() { build_hud(derive(bt), sel, mirror, bot_alive(bt)) }
-        if mode == M_FIGHT() { fight_hud(fa, fb, tris, GetFPS(), over) }
+        if mode == M_FIGHT() { fight_hud(fa, fb, tris, GetFPS(), over, clock) }
         EndDrawing()
 
         if shot != "" { if frame == shot_at {

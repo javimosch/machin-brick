@@ -29,6 +29,37 @@ func bot_new() (bt) {
     bt.name = "unnamed"
 }
 
+// ── A BOT IS A SLICE, AND SLICES ALIAS ───────────────────────────────────
+// `f.bt = bt0` copies the struct and shares its bricks, so a fight fought with
+// a robot takes bricks off the robot ITSELF. It cost two of the four bugs in
+// the first build and they looked nothing alike: every battle after the first
+// was an instant win, because the opponent had been shot to pieces in the
+// previous one and no longer derived as a machine; and a rematch spawned the
+// enemy lying on the floor, because a heap with no legs is marked down at
+// birth. One `=`, two symptoms, neither of which points at it.
+//
+// Every place that takes a robot somewhere it will be damaged copies it. The
+// assertion that catches the class is not about fighting: FIGHT WITH A ROBOT
+// AND THE ROBOT IS UNCHANGED.
+func bot_copy(bt0) (bt) {
+    bt = bot_new()
+    bt.name = bt0.name
+    i := 0
+    while i < bt0.n {
+        br := Brick{}
+        br.x = bt0.b[i].x
+        br.y = bt0.b[i].y
+        br.z = bt0.b[i].z
+        br.kind = bt0.b[i].kind
+        br.hp = bt0.b[i].hp
+        br.limb = bt0.b[i].limb
+        br.live = bt0.b[i].live
+        bt.b = append(bt.b, br)
+        i = i + 1
+    }
+    bt.n = bt0.n
+}
+
 func in_grid(x, y, z) (o) {
     o = 0
     if x >= 0 { if y >= 0 { if z >= 0 {

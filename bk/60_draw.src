@@ -67,15 +67,18 @@ func brick_draw(cx, cy, cz, ang, kind, dim) (tris) {
 // Hull bricks ride the body; a leg's bricks are strung between its hinge and
 // wherever the gait put its foot, which is what makes a limb visibly swing
 // without anything storing a limb pose.
+// THE HULL IS FLOODED ONCE, not once per brick. `brick_limb` used to work out
+// the hull for every brick it was asked about, which made drawing a robot
+// cubic in its brick count: a thirty-brick machine cost a quarter of a million
+// grid lookups a frame, for each of two machines, and the editor stuttered
+// while the profiler would have said "drawing".
 func bot_draw(f, dim) (tris) {
     tris = 0
-    rlBegin(RL_TRIANGLES())
-    rlSetTexture(0)
-    rlEnd()
+    hull := hull_of(f.bt)
     i := 0
     while i < f.bt.n {
         if f.bt.b[i].live == 1 {
-            li := brick_limb(f, i)
+            li := brick_limb_h(f, i, hull)
             bx := 0.0
             by := 0.0
             bz := 0.0
@@ -93,8 +96,11 @@ func bot_draw(f, dim) (tris) {
 // Which limb a brick belongs to. Recomputed rather than stored, because the
 // robot loses bricks and the answer changes; it is a small graph.
 func brick_limb(f, i) (li) {
+    li = brick_limb_h(f, i, hull_of(f.bt))
+}
+
+func brick_limb_h(f, i, hull) (li) {
     li = 0 - 1
-    hull := hull_of(f.bt)
     if hull[i] == 1 { return }
     // the nearest hinge that has a limb
     bd := 99.0
@@ -215,4 +221,21 @@ func grid_draw() (tris) {
         }
         x = x + 1
     }
+}
+
+// A translucent-looking frame at the height bricks are currently being placed
+// at: four rails around the build volume, drawn dim, so the eye can tell where
+// the plane is without it hiding the model.
+func layer_draw(layer) (tris) {
+    tris = 0
+    y := cw(layer)
+    h := CW() * 0.06
+    w := cw(GX() - 1) * 0.5 + CW() * 0.5
+    d := cw(GZ() - 1) * 0.5 + CW() * 0.5
+    mx := cw(GX() - 1) * 0.5
+    mz := cw(GZ() - 1) * 0.5
+    tris = tris + box_y(mx, y, mz - d, w, h, h, 0.0, 96, 132, 168, 1.0)
+    tris = tris + box_y(mx, y, mz + d, w, h, h, 0.0, 96, 132, 168, 1.0)
+    tris = tris + box_y(mx - w, y, mz, h, h, d, 0.0, 96, 132, 168, 1.0)
+    tris = tris + box_y(mx + w, y, mz, h, h, d, 0.0, 96, 132, 168, 1.0)
 }

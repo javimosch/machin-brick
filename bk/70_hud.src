@@ -64,8 +64,8 @@ func build_hud(sp, sel, mirror, nb) {
     DrawText(ms, 330, 18, 15, mc)
     spec_panel(sp, 16, 60)
     palette_draw(sel)
-    DrawText("click place · right-click remove · 1-9,0,- pick brick · X mirror"
-             + " · [ ] layer · S save · TAB fight · drag orbit · ESC",
+    DrawText("click place · right-click remove · MIDDLE-DRAG or Q/E/R/F to look"
+             + " · 1-9,0,- brick · X mirror · [ ] layer · S save · TAB fight · ESC",
              14, H() - 92, 12, col_a(150, 200, 235, 210))
 }
 
@@ -74,7 +74,7 @@ func bar(x, y, w, h, f, r, g, b) {
     DrawRectangle(x, y, int(float(w) * clampf(f, 0.0, 1.0)), h, col(r, g, b))
 }
 
-func fight_hud(fa, fb, tris, fps, over) {
+func fight_hud(fa, fb, tris, fps, over, clock) {
     DrawRectangle(0, 0, W(), 40, col_a(12, 14, 19, 215))
     DrawText("machin-brick", 14, 6, 18, col(150, 196, 214))
     DrawText("yours", 240, 4, 10, col(104, 116, 136))
@@ -89,10 +89,14 @@ func fight_hud(fa, fb, tris, fps, over) {
     DrawText(str(tris), 800, 18, 15, col(226, 232, 240))
     DrawText("fps", 920, 4, 10, col(104, 116, 136))
     DrawText(str(fps), 920, 18, 15, col(150, 226, 160))
+    DrawText("clock", 1000, 4, 10, col(104, 116, 136))
+    cc := col(226, 232, 240)
+    if clock > 70.0 { cc = col(236, 190, 110) }
+    DrawText(str(int(90.0 - clock)) + " s", 1000, 18, 15, cc)
     if over != "" {
         DrawRectangle(W() / 2 - 180, H() / 2 - 40, 360, 80, col_a(14, 18, 24, 235))
         DrawText(over, W() / 2 - 150, H() / 2 - 16, 28, col(232, 216, 150))
     }
-    DrawText("TAB back to the workshop · SPACE pause · R rematch · ESC",
+    DrawText("TAB workshop · SPACE pause · T rematch · drag orbit · Q/E turn · ESC",
              14, H() - 24, 12, col_a(150, 200, 235, 210))
 }

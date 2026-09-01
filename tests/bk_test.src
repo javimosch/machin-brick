@@ -334,12 +334,43 @@ func t_fight() (bad) {
     }
     bad = bad + okb(wins > 2, "most fights end in a result (" + str(wins) + "/5)")
 
+    // ── FIGHTING WITH A ROBOT DOES NOT DAMAGE THE ROBOT ──────────────────
+    // Not an assertion about fighting: an assertion about aliasing. A Bot is a
+    // slice of bricks, `f.bt = bt0` shares them, and a battle takes bricks
+    // apart — so the second fight was between two wrecks. It showed up as
+    // "every rematch is an instant win" and as "the enemy spawns lying on the
+    // floor", and neither symptom points anywhere near the cause.
+    // FRESH MACHINES, or the check is measuring bots the fights above already
+    // took apart — which is the very failure being tested for, and it made the
+    // first version of this assertion pass on the broken code.
+    ca := mk_quad()
+    ca = bot_add(ca, 7, 8, 7, P_GUN())
+    cb := mk_biped()
+    cb = bot_add(cb, 7, 9, 7, P_GUN())
+    before := bot_alive(ca)
+    bfore := bot_alive(cb)
+    wz, sz := sim_fight(ca, cb, 3, 60.0)
+    bad = bad + oki(bot_alive(ca), before, "a fight leaves your robot alone")
+    bad = bad + oki(bot_alive(cb), bfore, "and its opponent")
+    // ...and therefore the SAME two robots fight the same way twice
+    w3, s3 := sim_fight(ca, cb, 3, 60.0)
+    bad = bad + okb(w3 == wz, "so a rematch is a fight, not a walkover")
+    bad = bad + okb(absf(s3 - sz) < 0.001, "...and lasts as long")
+
     // A FIGHT IS DETERMINISTIC given its seed, which is what makes balancing
     // ten opponents possible at all.
     w1, s1 := sim_fight(a, b, 99, 60.0)
     w2, s2 := sim_fight(a, b, 99, 60.0)
     bad = bad + okb(w1 == w2, "the same fight twice has the same winner")
     bad = bad + okb(absf(s1 - s2) < 0.001, "...at the same moment")
+
+    // ...and a fight that neither side can finish is a draw rather than a
+    // hang: two machines that cannot reach each other is a real outcome and
+    // the clock is what says so
+    slow, tslow := sim_fight(a, a, 7, 8.0)
+    bad = bad + okb(tslow <= 8.05, "a fight cannot run past its clock ("
+                    + str(int(tslow)) + " s)")
+    if slow > 0 - 2 { }
 
     // ...and a robot with no weapon loses to one with a weapon, every time,
     // which is the floor under the whole design
