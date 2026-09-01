@@ -1,5 +1,30 @@
 # machin-brick
 
+> **Deprecated — an abandoned POC.** The idea it was built to test came out
+> right and the game around it did not. Kept for the derivation, which is the
+> part worth reading, and for the assertions, which are the part worth copying.
+>
+> **What it proved.** Hand the program a pile of bricks and it works out
+> whether that has legs, how many, how long they are and what it weighs — and
+> then this family's gait rules, written years ago for a humanoid, apply to it
+> unchanged. Shoot a leg off and the machine is derived again mid-fight: a
+> quadruped walks away on three because the solver is now solving a
+> three-legged problem. That is asserted, not claimed.
+>
+> **What it did not.** The game. The workshop places bricks on a horizontal
+> plane one layer at a time, which is clumsy for anything but a simple shape;
+> limbs draw as straight lines because there are no knees; the matchup between
+> the two example machines is 8-in-9 either way round; and the ten prefab
+> opponents and the pick-one-of-three unlock — which is where the actual game
+> was — were never built. It is a technology demonstration that did not become
+> a toy.
+>
+> The parts most worth taking elsewhere: `bk/30_derive.src` (bricks to a
+> kinematic machine), `bk/40_gait.src` (the family's three rules for N legs),
+> and `bk/55_diag.src` with the state machine in `bk/50_fight.src` — the
+> narrated fight is the single most useful thing built in this repo, and it
+> found five bugs in its first run.
+
 Build a robot out of bricks. **The walk falls out of what you built.**
 
 ```
