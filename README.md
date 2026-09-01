@@ -4,7 +4,7 @@ Build a robot out of bricks. **The walk falls out of what you built.**
 
 ```
 ./build.sh              build bin/brick
-./build.sh test         51 headless assertions, no window
+./build.sh test         50 headless assertions, no window
 ./bin/brick             the workshop; TAB to fight
 ./bin/brick --spec      what a build added up to
 ./bin/brick --sim 9     nine battles, no window
@@ -190,7 +190,7 @@ hundred fights in a second rather than one that somebody sat through.
 
 ## What is asserted
 
-Fifty-one headless assertions, at the two things a screenshot cannot show:
+Fifty headless assertions, at the two things a screenshot cannot show:
 that the derivation found what is really there, and that it still works after
 the shape changes.
 
