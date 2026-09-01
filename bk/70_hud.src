@@ -79,11 +79,13 @@ func fight_hud(fa, fb, tris, fps, over, clock) {
     DrawText("machin-brick", 14, 6, 18, col(150, 196, 214))
     DrawText("yours", 240, 4, 10, col(104, 116, 136))
     bar(240, 18, 220, 12, fa.hp / fa.hp0, 120, 196, 226)
-    DrawText(str(bot_alive(fa.bt)) + " bricks · " + gait_name(fa.sp.gait),
+    DrawText(str(bot_alive(fa.bt)) + " bricks · " + gait_name(fa.sp.gait)
+             + " · " + fs_name(fa.st) + " (" + fa.stwhy + ")",
              240, 34, 10, col(140, 156, 180))
     DrawText("theirs", 520, 4, 10, col(104, 116, 136))
     bar(520, 18, 220, 12, fb.hp / fb.hp0, 226, 130, 110)
-    DrawText(str(bot_alive(fb.bt)) + " bricks · " + gait_name(fb.sp.gait),
+    DrawText(str(bot_alive(fb.bt)) + " bricks · " + gait_name(fb.sp.gait)
+             + " · " + fs_name(fb.st) + " (" + fb.stwhy + ")",
              520, 34, 10, col(180, 148, 140))
     DrawText("triangles", 800, 4, 10, col(104, 116, 136))
     DrawText(str(tris), 800, 18, 15, col(226, 232, 240))

@@ -185,8 +185,9 @@ func t_shear() (bad) {
     nb4, l4 := bot_shed(bt)
     bt = nb4
     sp3 := derive(bt)
-    bad = bad + okb(sp3.ok == 0, "with no legs at all it cannot move ("
-                    + sp3.fault + ")")
+    bad = bad + oki(sp3.mobile, 0, "with no legs at all it cannot move")
+    bad = bad + okb(sp3.ok == 1, "...but it is still a machine, and its guns "
+                    + "still turn")
     if l2 + l3 + l4 > 0 { }
 }
 
@@ -205,7 +206,7 @@ func t_walk() (bad) {
         p := pose_new(sp)
         // let it settle, then measure a few seconds of walking
         i := 0
-        while i < 120 { p = pose_step(p, sp, 0.016666, 1.0, 0.0, 100.0)  i = i + 1 }
+        while i < 120 { p = pose_step(p, sp, 0.016666, 1.0, 0.0, 100.0, 0)  i = i + 1 }
         settled := p.hy
         lo := 99.0
         slide := 0.0
@@ -235,7 +236,7 @@ func t_walk() (bad) {
                 downs = append(downs, dn)
                 li = li + 1
             }
-            p = pose_step(p, sp, 0.016666, 1.0, 0.0, 100.0)
+            p = pose_step(p, sp, 0.016666, 1.0, 0.0, 100.0, 0)
             // A PLANTED FOOT DOES NOT MOVE. The first rule, on a body the
             // rule was not written for.
             li = 0
@@ -385,6 +386,120 @@ func t_fight() (bad) {
     if su > 0.0 { }
 }
 
+// ── THE STATE MACHINE ────────────────────────────────────────────────────
+// The point of naming the states was to be able to debug without watching, so
+// the first assertion is about the names themselves: six of the eight lost
+// their case labels while this file was being built up function by function,
+// and every trace line for a robot in those states said "spawn". A trace that
+// lies is worse than no trace.
+func t_state() (bad) {
+    bad = 0
+    println("the state machine")
+    seen := []string{}
+    dup := 0
+    i := 0
+    while i < 9 {
+        nm := fs_name(i)
+        j := 0
+        while j < len(seen) {
+            if seen[j] == nm { dup = dup + 1 }
+            j = j + 1
+        }
+        seen = append(seen, nm)
+        i = i + 1
+    }
+    bad = bad + oki(dup, 0, "every state has its own name")
+
+    f := fld_state_bot()
+    // A LEGLESS MACHINE IS IMMOBILE, NOT KNOCKED OVER. It cannot walk and it
+    // can still shoot, and conflating the two turned one unlucky leg hit into
+    // ten seconds of being dismantled while unable to reply.
+    // A COPY. `legless := f` shares the brick slice, so killing the hinges
+    // here killed them in `f` as well — and the machine that was supposed to
+    // still have its legs a few lines below had none. Same trap as the one in
+    // 20_build.src, caught by its own test.
+    legless := bot_copy(f)
+    k := 0
+    while k < legless.n {
+        if legless.b[k].kind == P_HINGE() { legless.b[k].live = 0 }
+        k = k + 1
+    }
+    nb, lost := bot_shed(legless)
+    legless = nb
+    sp := derive(legless)
+    bad = bad + okb(sp.ok == 1, "a robot with no legs is still a robot")
+    bad = bad + oki(sp.mobile, 0, "but it cannot move")
+    bad = bad + okb(lost > 0, "and it did lose the legs (" + str(lost) + " bricks)")
+
+    ff := fighter_new(legless, 0, 0.0, 0.0, 0.0)
+    ee := fighter_new(f, 1, 8.0, 0.0, PI())
+    bad = bad + okb(ff.p.down == 0.0, "it is not lying down")
+    nf, wnt, tgx, tgz, rv := think(ff, ee, 0.5)
+    bad = bad + okb(nf.st == FS_IMMOBILE(), "it knows it is immobile ("
+                    + fs_name(nf.st) + ")")
+    bad = bad + okb(wnt < 0.01, "and does not try to walk")
+    if tgx + tgz > 0.0 { }
+    if rv > 0 - 1 { }
+
+    // ...and a machine that still has legs gets up again
+    gg := fighter_new(f, 0, 0.0, 0.0, 0.0)
+    gg.p = pose_topple(gg.p, gg.sp, 9999.0)
+    bad = bad + okb(gg.p.down > 0.0, "a big enough hit knocks one over")
+    t := 0.0
+    while t < 5.0 {
+        gg.p = pose_step(gg.p, gg.sp, 0.0333, 0.0, 0.0, 1.0, 0)
+        t = t + 0.0333
+    }
+    bad = bad + okb(gg.p.down == 0.0, "and it gets back up")
+}
+
+func fld_state_bot() (bt) {
+    bt = mk_quad()
+    bt = bot_add(bt, 7, 8, 7, P_GUN())
+}
+
+// ── THE TRACE AGREES WITH THE FIGHT ──────────────────────────────────────
+func t_trace() (bad) {
+    bad = 0
+    println("watching without eyes")
+    a := mk_quad()
+    a = bot_add(a, 7, 8, 7, P_GUN())
+    b := mk_biped()
+    b = bot_add(b, 7, 9, 7, P_GUN())
+    // the invariants hold for an ordinary fight — no machine underground, out
+    // of the arena, or firing a hundred rounds at nothing
+    wn, secs := sim_verbose(a, b, 11, 60.0, 0, 0, 1)
+    bad = bad + okb(wn != 0 - 2, "a normal fight breaks no invariant")
+    bad = bad + okb(secs > 0.5, "and it lasts more than a moment ("
+                    + str(int(secs)) + " s)")
+
+    // ── NO THRASHING ─────────────────────────────────────────────────────
+    // The bands used to be a knife edge and a robot flipped advance/hold twice
+    // a second for a whole fight, which is why it never stood still long
+    // enough to shoot straight. Hysteresis is what fixed it, and this is what
+    // says it stayed fixed.
+    fa := fighter_new(a, 0, 0.0 - 7.0, 0.0, 0.0)
+    fb := fighter_new(b, 1, 7.0, 0.0, PI())
+    flips := 0
+    t := 0.0
+    while t < 20.0 {
+        pa := fa.st
+        wa, wanta, ax, az, arev := think(fa, fb, 0.0333)
+        wb, wantb, bx, bz, brev := think(fb, fa, 0.0333)
+        fa = wa
+        fb = wb
+        if fa.st != pa { flips = flips + 1 }
+        fa.p = pose_aim(fa.p, fa.sp, fb.p.x, fb.p.z, 0.0333)
+        fb.p = pose_aim(fb.p, fb.sp, fa.p.x, fa.p.z, 0.0333)
+        fa.p = pose_step(fa.p, fa.sp, 0.0333, wanta, ax, az, arev)
+        fb.p = pose_step(fb.p, fb.sp, 0.0333, wantb, bx, bz, brev)
+        t = t + 0.0333
+    }
+    bad = bad + okb(flips < 14, "a machine does not thrash between states ("
+                    + str(flips) + " changes in 20 s)")
+    bad = bad + okb(flips > 0, "...but it does change its mind at all")
+}
+
 func main() {
     bad := 0
     println("")
@@ -393,6 +508,8 @@ func main() {
     bad = bad + t_shear()
     bad = bad + t_walk()
     bad = bad + t_recoil()
+    bad = bad + t_state()
+    bad = bad + t_trace()
     bad = bad + t_fight()
     println("")
     if bad == 0 { println("ALL PASS") } else { println(str(bad) + " FAILED") }

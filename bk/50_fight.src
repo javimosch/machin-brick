@@ -18,6 +18,12 @@ type Fighter struct {
     hp   float
     hp0  float
     heat float            // power drawn recently, against what the batteries make
+    st     int
+    stt    float
+    stwhy  string
+    shots  int             // rounds sent
+    hits   int             // ...and how many of them found a brick
+    taken  int             // and how many found this one
 }
 
 func fighter_new(bt0, side, x, z, hd) (f) {
@@ -39,6 +45,8 @@ func fighter_new(bt0, side, x, z, hd) (f) {
     }
     f.hp = f.sp.hp
     f.hp0 = f.sp.hp
+    f.st = 0
+    f.stwhy = "start"
     f.p.aim = hd
     // ── IT SPAWNS STANDING UP ────────────────────────────────────────────
     // `pose_new` guesses the ride height from the leg length; the feet decide
@@ -142,6 +150,7 @@ func fire_step(fa0, fb0, bolts0, dt, tick) (fa, fb, bolts) {
                 bl.kind = k
                 bl.side = fa.side
                 bolts = append(bolts, bl)
+                fa.shots = fa.shots + 1
                 fa.cool[i] = wep_cool(k) / duty
 
                 // ── RECOIL, APPLIED WHERE THE GUN IS ─────────────────────
@@ -160,7 +169,12 @@ func fire_step(fa0, fb0, bolts0, dt, tick) (fa, fb, bolts) {
     j := 0
     while j < len(bolts) {
         if bolts[j].side == fa.side { if bolts[j].t > 0.099 {
-            fb = bolt_hit(fb, bolts[j], tick + j)
+            nf, landed := bolt_hit(fb, bolts[j], tick + j)
+            fb = nf
+            // A HIT IS SCORED BY THE SHOOTER. It used to be counted on the
+            // machine that was hit, which read in the trace as "theirs shot 1,
+            // hit 21" — a robot that had fired once and landed twenty-one.
+            if landed == 1 { fa.hits = fa.hits + 1 }
         } }
         j = j + 1
     }
@@ -171,8 +185,9 @@ func fire_step(fa0, fb0, bolts0, dt, tick) (fa, fb, bolts) {
 // connectivity flood runs, and whatever is no longer attached to the core
 // falls off — so shooting a shoulder drops the whole arm, gun included, and
 // the robot's next step is worked out from what is left.
-func bolt_hit(f0, bl, salt) (f) {
+func bolt_hit(f0, bl, salt) (f, landed) {
     f = f0
+    landed = 0
     // ── A MISS IS A MISS ─────────────────────────────────────────────────
     // The bolt takes the brick nearest where it landed, but only if that is
     // within about two brick-widths. At the metre and a half this started at,
@@ -191,6 +206,8 @@ func bolt_hit(f0, bl, salt) (f) {
         i = i + 1
     }
     if best < 0 { return }
+    landed = 1
+    f.taken = f.taken + 1
     dmg := wep_dmg(bl.kind)
     f.bt.b[best].hp = f.bt.b[best].hp - dmg
     f.hp = f.hp - dmg
@@ -229,7 +246,10 @@ func refit(f0) (f) {
     // result rather than a special case: `derive` says it has no way to move,
     // and a thing with no way to move and no legs under it is on the floor.
     if f.sp.ok == 0 { np.down = 0.001 }
-    if f.sp.ok == 1 { if f.sp.nleg == 0 { if f.sp.nwheel < 2 { np.down = 0.001 } } }
+    // LOSING YOUR LEGS IS ITS OWN STATE. It is not a topple — nothing knocked
+    // it over — and a machine sitting on its hull can still traverse its guns.
+    // Treating the two as one made every leg hit a death sentence.
+    if f.sp.ok == 1 { if f.sp.nleg == 0 { if f.sp.nwheel < 2 { np.hy = f.sp.stand * 0.30 } } }
     f.p = np
     f.hp = 0.0
     i := 0
@@ -249,45 +269,25 @@ func fighter_dead(f) (o) {
 // Preferred range comes out of the guns it is carrying, weighted by what each
 // contributes, so a mixed loadout wants to be somewhere in between and a
 // robot that loses its rail gun to a lucky shot starts closing in.
+// Preferred range comes out of the guns it is carrying, so a robot that loses
+// its rail gun to a lucky shot starts closing in.
 func want_range(sp) (r) {
-    tot := 0.0
-    acc := 0.0
-    i := 0
-    while i < sp.nlimb { i = i + 1 }
     r = 10.0
     if sp.rmax > 0.1 { r = sp.rmax * 0.72 }
-    if tot > 0.0 { r = acc / tot }
 }
 
-func think(f0, e, dt) (f, want, tx, tz) {
+func think(f0, e, dt) (f, want, tx, tz, rev) {
     f = f0
-    want = 0.0
-    tx = e.p.x
-    tz = e.p.z
-    if f.p.down > 0.0 { return }
-    dx := e.p.x - f.p.x
-    dz := e.p.z - f.p.z
-    d := sqrt(dx * dx + dz * dz)
-    pref := want_range(f.sp)
-    if d > pref * 1.05 {
-        want = 1.0
+    f.stt = f.stt + dt
+    nst, nwhy := next_state(f, e)
+    if nst != f.st {
+        f.st = nst
+        f.stt = 0.0
+        f.stwhy = nwhy
     }
-    if d < pref * 0.7 {
-        // back off, which for a slow machine is not much of a plan and it does
-        // it anyway — being unable to disengage IS the cost of armour
-        want = 0.75
-        tx = f.p.x - dx
-        tz = f.p.z - dz
-    }
-    if d >= pref * 0.7 { if d <= pref * 1.05 {
-        // ...and at the range it wants, it circles, which keeps the fight
-        // moving and puts flanks in front of guns
-        want = 0.55
-        tx = f.p.x - dz * 0.9
-        tz = f.p.z + dx * 0.9
-    } }
-    if dt > 0.0 { }
+    want, tx, tz, rev = state_move(f, e)
 }
+
 
 // ── A BATTLE, WITHOUT A WINDOW ───────────────────────────────────────────
 // The most useful thing in an auto-battler: run the fight with nobody
@@ -315,7 +315,7 @@ func can_fight(f) (o) {
 
 func can_move(f) (o) {
     o = 0
-    if f.sp.ok == 1 { if f.p.down == 0.0 { o = 1 } }
+    if f.sp.ok == 1 { if f.p.down == 0.0 { if f.sp.mobile == 1 { o = 1 } } }
 }
 
 // Who has won, or -1 if it is still going. A machine that can no longer shoot
@@ -329,9 +329,76 @@ func verdict(fa, fb) (w) {
     if fighter_dead(fb) == 1 { db = 1 }
     if can_fight(fa) == 0 { da = 1 }
     if can_fight(fb) == 0 { db = 1 }
+    // ...and one that can neither move nor shoot back is finished even if it
+    // still has a core: it cannot affect the outcome, and the clock running
+    // out on it is not a draw, it is a loss.
+    if can_move(fa) == 0 { if fa.hits == 0 { if fa.shots > 30 { da = 1 } } }
+    if can_move(fb) == 0 { if fb.hits == 0 { if fb.shots > 30 { db = 1 } } }
     if da == 1 { if db == 1 { w = 2  return } }
     if db == 1 { w = 0  return }
     if da == 1 { w = 1 }
+}
+
+// The narrated version: the same fight, telling you what it is doing. `trace`
+// prints state changes, `dump` prints a row every N ticks, `check` stops on the
+// first broken invariant.
+func sim_verbose(bta, btb, seed, maxt, trace, dump, check) (winner, secs) {
+    winner = 0 - 1
+    secs = 0.0
+    fa := fighter_new(bta, 0, 0.0 - 7.0, rnd(seed, 800, 0) * 2.0 - 1.0, 0.0)
+    fb := fighter_new(btb, 1, 7.0, rnd(seed, 800, 1) * 2.0 - 1.0, PI())
+    if fa.sp.ok == 0 { println("  yours cannot fight: " + fa.sp.fault)  winner = 1  return }
+    if fb.sp.ok == 0 { println("  theirs cannot fight: " + fb.sp.fault)  winner = 0  return }
+    if dump > 0 { println(diag_head()) }
+    bolts := []Bolt{}
+    dt := 0.03333
+    tick := seed * 131
+    n := 0
+    while secs < maxt {
+        pa := fa.st
+        pb := fb.st
+        wa, wanta, ax, az, arev := think(fa, fb, dt)
+        wb, wantb, bx, bz, brev := think(fb, fa, dt)
+        fa = wa
+        fb = wb
+        if trace > 0 {
+            if fa.st != pa {
+                println("  " + fnum(secs, 5) + "  yours  -> " + pad(fs_name(fa.st), 9)
+                        + "  (" + fa.stwhy + ")")
+            }
+            if fb.st != pb {
+                println("  " + fnum(secs, 5) + "  theirs -> " + pad(fs_name(fb.st), 9)
+                        + "  (" + fb.stwhy + ")")
+            }
+        }
+        fa.p = pose_aim(fa.p, fa.sp, fb.p.x, fb.p.z, dt)
+        fb.p = pose_aim(fb.p, fb.sp, fa.p.x, fa.p.z, dt)
+        fa.p = pose_step(fa.p, fa.sp, dt, wanta, ax, az, arev)
+        fb.p = pose_step(fb.p, fb.sp, dt, wantb, bx, bz, brev)
+        fa, fb, bolts = fire_step(fa, fb, bolts, dt, tick)
+        fb, fa, bolts = fire_step(fb, fa, bolts, dt, tick + 7)
+        bolts = bolts_age(bolts, dt)
+        if dump > 0 { if n % dump == 0 {
+            d := vlen(fa.p.x - fb.p.x, 0.0, fa.p.z - fb.p.z)
+            println(fnum(secs, 5) + " " + diag_one(fa))
+            println("      " + diag_one(fb) + "   apart " + fnum(d, 5))
+        } }
+        if check > 0 {
+            m := diag_check(fa, fb, secs)
+            if m != "" {
+                println("  BROKEN at " + fnum(secs, 5) + " s: " + m)
+                winner = 0 - 2
+                return
+            }
+        }
+        tick = tick + 1
+        n = n + 1
+        secs = secs + dt
+        v := verdict(fa, fb)
+        if v == 0 { winner = 0  return }
+        if v == 1 { winner = 1  return }
+        if v == 2 { winner = 2  return }
+    }
 }
 
 func sim_fight(bta, btb, seed, maxt) (winner, secs) {
@@ -345,14 +412,14 @@ func sim_fight(bta, btb, seed, maxt) (winner, secs) {
     dt := 0.03333
     tick := seed * 131
     while secs < maxt {
-        wa, wanta, ax, az := think(fa, fb, dt)
-        wb, wantb, bx, bz := think(fb, fa, dt)
+        wa, wanta, ax, az, arev := think(fa, fb, dt)
+        wb, wantb, bx, bz, brev := think(fb, fa, dt)
         fa = wa
         fb = wb
         fa.p = pose_aim(fa.p, fa.sp, fb.p.x, fb.p.z, dt)
         fb.p = pose_aim(fb.p, fb.sp, fa.p.x, fa.p.z, dt)
-        fa.p = pose_step(fa.p, fa.sp, dt, wanta, ax, az)
-        fb.p = pose_step(fb.p, fb.sp, dt, wantb, bx, bz)
+        fa.p = pose_step(fa.p, fa.sp, dt, wanta, ax, az, arev)
+        fb.p = pose_step(fb.p, fb.sp, dt, wantb, bx, bz, brev)
         fa, fb, bolts = fire_step(fa, fb, bolts, dt, tick)
         fb, fa, bolts = fire_step(fb, fa, bolts, dt, tick + 7)
         bolts = bolts_age(bolts, dt)
@@ -363,6 +430,119 @@ func sim_fight(bta, btb, seed, maxt) (winner, secs) {
         if v == 1 { winner = 1  return }
         if v == 2 { winner = 2  return }
     }
+}
+
+// ── WHAT IT IS DOING, AS A NAMED STATE ───────────────────────────────────
+// The behaviour used to be a chain of ifs inside one function. That is fine
+// until something goes wrong, and then the only way to find out what a robot
+// thought it was doing is to watch it — which is the one thing this project
+// cannot do, and the reason the last round of bugs were diagnosed from
+// screenshots and diagnosed wrongly.
+//
+// So it is a state machine with names. The states are what a person would say
+// out loud about a machine in a fight, each transition is one condition, and
+// every change is recorded with its reason. `--trace` prints them, and that is
+// how the next bug gets found.
+func FS_SPAWN() (v)    { v = 0 }
+func FS_ADVANCE() (v)  { v = 1 }
+func FS_HOLD() (v)     { v = 2 }
+func FS_FLANK() (v)    { v = 3 }
+func FS_WITHDRAW() (v) { v = 4 }
+func FS_TOPPLED() (v)  { v = 5 }
+func FS_DISARMED() (v) { v = 6 }
+func FS_IMMOBILE() (v) { v = 8 }   // no legs left, but the guns still turn
+func FS_DEAD() (v)     { v = 7 }
+
+func fs_name(fss) (nm) {
+    nm = "spawn"
+    if fss == FS_ADVANCE() { nm = "advance" }
+    if fss == FS_HOLD() { nm = "hold" }
+    if fss == FS_FLANK() { nm = "flank" }
+    if fss == FS_WITHDRAW() { nm = "withdraw" }
+    if fss == FS_TOPPLED() { nm = "toppled" }
+    if fss == FS_DISARMED() { nm = "disarmed" }
+    if fss == FS_IMMOBILE() { nm = "immobile" }
+    if fss == FS_DEAD() { nm = "dead" }
+}
+
+// Is the target inside the arc the guns are actually trained on, right now?
+func on_target(f, e) (o) {
+    o = 0
+    bear := atan2(e.p.x - f.p.x, e.p.z - f.p.z)
+    off := bear - f.p.aim
+    while off > PI() { off = off - TAU() }
+    while off < 0.0 - PI() { off = off + TAU() }
+    if absf(off) < 0.20 { o = 1 }
+}
+
+// ── ONE CONDITION A TRANSITION ───────────────────────────────────────────
+// Written as "what would make me change my mind", in the order a person would
+// check them, and returning the REASON as well as the state, because a trace
+// that says only what changed is half a trace.
+func next_state(f, e) (nxs, nxwhy) {
+    nxs = f.st
+    nxwhy = ""
+    if fighter_dead(f) == 1 { nxs = FS_DEAD()  nxwhy = "no core"  return }
+    if f.p.down > 0.0 { nxs = FS_TOPPLED()  nxwhy = "knocked over"  return }
+    if can_fight(f) == 0 { nxs = FS_DISARMED()  nxwhy = "no weapons left"  return }
+    if can_move(f) == 0 { nxs = FS_IMMOBILE()  nxwhy = "no legs left"  return }
+    if f.st == FS_TOPPLED() { nxs = FS_ADVANCE()  nxwhy = "back on its feet"  return }
+    if f.st == FS_IMMOBILE() { nxs = FS_HOLD()  nxwhy = "moving again"  return }
+    if f.st == FS_DEAD() { return }
+    d := vlen(e.p.x - f.p.x, 0.0, e.p.z - f.p.z)
+    pref := want_range(f.sp)
+    if f.st == FS_SPAWN() {
+        if f.stt > 0.4 { nxs = FS_ADVANCE()  nxwhy = "go" }
+        return
+    }
+    // ── HYSTERESIS ───────────────────────────────────────────────────────
+    // The band used to be a knife edge, and the trace showed a robot flipping
+    // advance/hold twice a second for the whole fight — it never stood still
+    // long enough to shoot straight. Leaving a state costs more than entering
+    // it, which is what a band means.
+    out := pref * 1.08
+    close := pref * 0.42
+    if f.st == FS_HOLD() { out = pref * 1.28  close = pref * 0.34 }
+    if d > out { nxs = FS_ADVANCE()  nxwhy = "out of range"  return }
+    if d < close { nxs = FS_WITHDRAW()  nxwhy = "too close"  return }
+    // in the band. HOLD AND SHOOT is the default — a machine that circles
+    // instead of shooting was the last bug, and making that a named state
+    // rather than a branch is most of why it will not come back quietly.
+    if f.st == FS_HOLD() {
+        if f.stt > 3.0 { if f.hits == 0 { nxs = FS_FLANK()  nxwhy = "nothing landing" } }
+        if f.stt > 1.2 { if on_target(f, e) == 0 { nxs = FS_FLANK()  nxwhy = "cannot train on it" } }
+        return
+    }
+    if f.st == FS_FLANK() {
+        if f.stt > 2.5 { nxs = FS_HOLD()  nxwhy = "come round" }
+        return
+    }
+    nxs = FS_HOLD()
+    nxwhy = "in range"
+}
+
+// What the state means for the legs. HOLD is missing from this list on
+// purpose: it stands still and shoots, which is the whole point of it and
+// exactly what the old chain of ifs never did — it always had somewhere to be.
+func state_move(f, e) (mvw, mvx, mvz, mvrev) {
+    mvw = 0.0
+    mvx = e.p.x
+    mvz = e.p.z
+    mvrev = 0
+    dx := e.p.x - f.p.x
+    dz := e.p.z - f.p.z
+    if f.st == FS_ADVANCE() { mvw = 1.0 }
+    // ── IT BACKS AWAY FACING FORWARD ─────────────────────────────────────
+    // Turning round to retreat points the hull away from the enemy, and the
+    // guns only train to ±120° of the hull — so a withdrawing machine could
+    // not shoot at all. The trace showed it plainly: a rail-gun robot that had
+    // fired once in seven seconds while walking backwards across the arena.
+    // It reverses instead, which is both what a legged machine can do and the
+    // difference between withdrawing and fleeing.
+    if f.st == FS_WITHDRAW() { mvw = 0.7  mvrev = 1 }
+    if f.st == FS_FLANK() { mvw = 0.7  mvx = f.p.x - dz  mvz = f.p.z + dx }
+    if f.st == FS_DISARMED() { mvw = 0.9  mvx = f.p.x - dx  mvz = f.p.z - dz }
+    if f.st == FS_IMMOBILE() { mvw = 0.0 }
 }
 
 func bolts_age(bolts0, dt) (bolts) {

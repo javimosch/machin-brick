@@ -20,7 +20,7 @@ fi
 
 SHARED=("$LOWPOLY/lp/05_ffi.src" "$LOWPOLY/lp/10_math.src")
 BK=(bk/05_win.src bk/10_part.src bk/20_build.src bk/30_derive.src
-    bk/40_gait.src bk/50_fight.src bk/60_draw.src bk/70_hud.src)
+    bk/40_gait.src bk/50_fight.src bk/55_diag.src bk/60_draw.src bk/70_hud.src)
 
 RL_VER=5.0
 RL_TAR="raylib-${RL_VER}_linux_amd64"

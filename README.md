@@ -4,10 +4,12 @@ Build a robot out of bricks. **The walk falls out of what you built.**
 
 ```
 ./build.sh              build bin/brick
-./build.sh test         50 headless assertions, no window
+./build.sh test         64 headless assertions, no window
 ./bin/brick             the workshop; TAB to fight
 ./bin/brick --spec      what a build added up to
 ./bin/brick --sim 9     nine battles, no window
+./bin/brick --trace     one battle, narrated: every state change and why
+./bin/brick --dump 60   ...with a table of the world every 60 ticks
 ```
 
 ## The claim
@@ -159,6 +161,64 @@ every brick it was asked about, which made drawing a robot cubic in its brick
 count: a thirty-brick machine cost a quarter of a million grid lookups a frame.
 The hull is flooded once per draw.
 
+## Debugging without eyes
+
+This repo has no eyes, and neither does the thing writing it. Every bug so far
+was diagnosed from a screenshot and about half of those diagnoses were wrong:
+bodies that flew into the sky looked like a physics bug and were an `=`; robots
+that circled each other looked like cowardice and were a bearing.
+
+So the behaviour is now **a state machine with names**, and the fight narrates
+itself.
+
+```
+$ ./bin/brick --trace --dump 250
+Strider vs Bastion:
+   t     state         x      z    hp   br   gait     shots hits taken  in-state
+    0 spawn         -7    0.5  hp  234  br  21  biped    shot 0 hit 0 taken 0
+      spawn          7   -0.7  hp  366  br  36  trot     shot 0 hit 0 taken 0
+    0.3  yours  -> advance    (go)
+    0.4  theirs -> hold       (in range)
+    1.8  theirs -> flank      (cannot train on it)
+    2.3  yours  -> hold       (in range)
+    2.9  yours  -> immobile   (no legs left)
+    6.5  theirs -> toppled    (knocked over)
+  yours wins at    12 s
+```
+
+Eight states — spawn, advance, hold, flank, withdraw, toppled, immobile,
+disarmed, dead — one condition a transition, and **every change records the
+reason it happened**. `--dump N` prints a row every N ticks, and `--check`
+tests invariants every tick and stops on the first one that breaks: a machine
+below the floor, outside the arena, one that has never fired after twenty
+seconds, one that has fired a hundred rounds without a hit.
+
+None of it is a debugger. All of it is cheaper than one.
+
+### What the first trace found, in one run
+
+- **Six of the eight state names were missing their case label.** Every trace
+  line for a robot in those states said `spawn`. A trace that lies is worse
+  than no trace, so the first assertion is that every state has its own name.
+- **Hits were counted on the machine that was hit.** The trace read `theirs
+  shot 1, hit 21` — a robot that had fired once and landed twenty-one.
+- **The bands were a knife edge and the states thrashed** — advance/hold twice
+  a second for the whole fight, so a robot never stood still long enough to
+  shoot straight. Leaving a state now costs more than entering it.
+- **A withdrawing machine turned its back**, and the guns only train to ±120°
+  of the hull, so it could not shoot at all: a rail-gun robot that had fired
+  once in seven seconds while walking backwards across the arena. It reverses
+  now, facing what it is backing away from.
+- **A legless robot was marked "knocked over" and could not fire.** Losing your
+  legs failed the *derivation*, which set the toppled flag, which stopped the
+  guns — one unlucky hit turned a fight into ten seconds of being dismantled
+  while unable to reply. Being a machine and being able to walk are now two
+  different questions: a legless robot is `immobile`, its guns still traverse,
+  and a knocked-over one with legs under it gets back up after three seconds.
+
+Not one of those would have been obvious from watching, and four of them had
+already shipped.
+
 ## Damage is brick removal
 
 A shot takes apart the brick nearest where it landed. Then the connectivity
@@ -190,7 +250,7 @@ hundred fights in a second rather than one that somebody sat through.
 
 ## What is asserted
 
-Fifty headless assertions, at the two things a screenshot cannot show:
+Sixty-four headless assertions, at the two things a screenshot cannot show:
 that the derivation found what is really there, and that it still works after
 the shape changes.
 
@@ -216,7 +276,8 @@ the shape changes.
 | `bk/20_build.src` | the grid, mirroring, connectivity, the file |
 | `bk/30_derive.src` | **the file the idea rests on** — bricks to a machine |
 | `bk/40_gait.src` | the family's three rules, for N legs |
-| `bk/50_fight.src` | auto-battle, brick removal, and the headless sim |
+| `bk/50_fight.src` | the state machine, brick removal, and the headless sim |
+| `bk/55_diag.src` | the trace, the dump and the invariants |
 | `bk/60_draw.src` | a brick is a box with a stud, and the stud earns its four triangles |
 
 ## Where it is

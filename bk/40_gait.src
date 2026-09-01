@@ -187,23 +187,32 @@ func pose_aim(p0, sp, ex, ez, dt) (p) {
     if off < 0.0 - TURRET() { p.aim = p.hd - TURRET() }
 }
 
-func pose_step(p0, sp, dt, want, tox, toz) (p) {
+func pose_step(p0, sp, dt, want, tox, toz, rev) (p) {
     p = p0
     p.t = p.t + dt
     if p.down > 0.0 {
-        // KNOCKED OVER. It stays over: a brick robot has no arms to push
-        // itself up with unless the player built some, and standing up is a
-        // mechanism, not an animation.
+        // ── KNOCKED OVER, AND GETTING UP ─────────────────────────────────
+        // It used to stay over for good, and the trace showed what that meant:
+        // a machine that had lost its legs spent the last ten seconds of the
+        // fight lying still while the other one took it apart a brick at a
+        // time — unable to move, which is right, and unable to SHOOT, which is
+        // not. A knocked-over machine with legs under it rights itself after a
+        // few seconds. One with no legs left never does, and that is what
+        // losing your legs means rather than a slower way of dying.
         p.down = p.down + dt
         p.v = 0.0
+        if p.down > 3.2 { if sp.nleg > 0 { p.down = 0.0 } }
         return
     }
-    // steer
+    // steer — always toward the target, even when the target is the thing
+    // being backed away from
     if want > 0.001 {
         d := atan2(tox - p.x, toz - p.z)
         p.hd = turn_to(p.hd, d, sp.turn * dt)
     }
-    p.v = approach(p.v, sp.speed * want, sp.speed * 2.0 * dt + 0.01)
+    sgn := 1.0
+    if rev == 1 { sgn = 0.0 - 0.6 }        // backwards, and slower, as legs are
+    p.v = approach(p.v, sp.speed * want * sgn, sp.speed * 2.0 * dt + 0.01)
 
     ox := p.x
     oz := p.z
@@ -227,7 +236,7 @@ func pose_step(p0, sp, dt, want, tox, toz) (p) {
         return
     }
 
-    st := stride_of(sp, p.v)
+    st := stride_of(sp, absf(p.v))
     if st < 0.02 { st = 0.02 }
     gone := vlen(p.x - ox, 0.0, p.z - oz)
     p.phase = p.phase + gone / st
@@ -253,8 +262,9 @@ func turn_to(cur, want, step) (o) {
 
 func feet_step(p0, sp, st) (p) {
     p = p0
-    lead := lead_of(sp, p.v)
-    sf := stance_frac(sp, p.v)
+    lead := lead_of(sp, absf(p.v))
+    sf := stance_frac(sp, absf(p.v))
+    if p.v < 0.0 { lead = 0.0 - lead }
     legi := 0
     li := 0
     while li < sp.nlimb {

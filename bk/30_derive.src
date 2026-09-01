@@ -83,6 +83,15 @@ type Spec struct {
     nwheel int
     narm   int
     gait   int
+    // ...AND WHETHER IT CAN MOVE AT ALL, which is not the same as whether it
+    // is a machine. A robot that has lost every leg is still a robot: it has a
+    // core, it has power, its guns still traverse. It simply cannot walk. The
+    // two used to be one flag, and the consequence was that losing your legs
+    // failed the derivation, which marked the machine as knocked over, which
+    // stopped it firing — so one unlucky hit turned a fight into ten seconds
+    // of being dismantled. The trace is what showed it; from a screenshot it
+    // looked like a robot lying down.
+    mobile int
     // derived performance
     speed  float          // metres a second
     turn   float          // radians a second
@@ -215,8 +224,15 @@ func derive(bt) (sp) {
         i = i + 1
     }
     sp.gait = gait_for(sp.nleg, sp.nwheel)
+    sp.mobile = 1
     if sp.gait == G_NONE() {
+        // still a machine, and the editor still says so — but it is a turret
         sp.fault = "no legs and no wheels: it cannot move"
+        sp.mobile = 0
+        sp.ok = 1
+        sp.stand = cw(2)
+        sp.spread = cw(2)
+        sp.tip = sp.mass * 9.0
         return
     }
 

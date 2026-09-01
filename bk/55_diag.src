@@ -1,0 +1,78 @@
+// ── seeing without looking ───────────────────────────────────────────────
+// This repo has no eyes. Every bug in it so far was diagnosed from a
+// screenshot, and half of those diagnoses were wrong — bodies that flew into
+// the sky looked like a physics bug and were an `=`; robots that circled each
+// other looked like cowardice and were a bearing.
+//
+// So the fight can narrate itself. Three tools, and they answer three
+// different questions:
+//
+//   --trace   WHAT DID IT DECIDE, AND WHY. One line per state change, with the
+//             reason the machine gave. This is the one that would have caught
+//             the circling in a second.
+//
+//   --dump N  WHAT DOES THE WORLD LOOK LIKE. A row every N ticks: where both
+//             machines are, how far apart, what state, how much is left, what
+//             they have fired and hit. Good for "it stops happening after ten
+//             seconds" questions.
+//
+//   --check   WHAT SHOULD NEVER HAPPEN. Invariants tested every tick, printed
+//             the instant one breaks, with the tick number. A robot below the
+//             floor, outside the arena, aiming at nothing, or a fight where
+//             neither side has fired for twenty seconds.
+//
+// None of them is a debugger. All of them are cheaper than one.
+
+func fnum(v, w) (s) {
+    // a float to one decimal, padded — a table you cannot line up is a table
+    // nobody reads
+    n := int(v * 10.0)
+    s = str(float(n) / 10.0)
+    while len(s) < w { s = " " + s }
+}
+
+func inum(v, w) (s) {
+    s = str(v)
+    while len(s) < w { s = " " + s }
+}
+
+func pad(t, w) (s) {
+    s = t
+    while len(s) < w { s = s + " " }
+}
+
+// One line about one machine.
+func diag_one(f) (s) {
+    s = pad(fs_name(f.st), 9) + " " + fnum(f.p.x, 6) + " " + fnum(f.p.z, 6)
+      + "  hp " + inum(int(f.hp), 4) + "  br " + inum(bot_alive(f.bt), 3)
+      + "  " + pad(gait_name(f.sp.gait), 8)
+      + " shot " + inum(f.shots, 4) + " hit " + inum(f.hits, 4)
+      + " taken " + inum(f.taken, 4) + " st " + fnum(f.stt, 5)
+}
+
+func diag_head() (s) {
+    s = "   t     state         x      z    hp   br   gait     shots hits taken  in-state"
+}
+
+// ── THE INVARIANTS ───────────────────────────────────────────────────────
+// Things that are never true of a working fight. Returns a complaint, or "".
+func diag_check(fa, fb, secs) (msg) {
+    msg = ""
+    if fa.p.hy < 0.0 - 0.05 { msg = "your machine is below the floor"  return }
+    if fb.p.hy < 0.0 - 0.05 { msg = "its machine is below the floor"  return }
+    if vlen(fa.p.x, 0.0, fa.p.z) > ARENA() + 0.5 { msg = "you left the arena"  return }
+    if vlen(fb.p.x, 0.0, fb.p.z) > ARENA() + 0.5 { msg = "it left the arena"  return }
+    // a machine that has been alive for twenty seconds and never fired is
+    // either out of range for ever or cannot train its guns — both bugs
+    if secs > 20.0 {
+        if fa.shots == 0 { if can_fight(fa) == 1 { msg = "you have never fired"  return } }
+        if fb.shots == 0 { if can_fight(fb) == 1 { msg = "it has never fired"  return } }
+    }
+    // ...and one that has fired a hundred rounds without a hit is aiming at
+    // something that is not there
+    if fa.shots > 100 { if fa.hits == 0 { msg = "you have hit nothing in 100 rounds"  return } }
+    if fb.shots > 100 { if fb.hits == 0 { msg = "it has hit nothing in 100 rounds"  return } }
+    // the pose has to stay a number
+    if fa.p.hy != fa.p.hy { msg = "your hull height is not a number"  return }
+    if fb.p.hy != fb.p.hy { msg = "its hull height is not a number"  return }
+}

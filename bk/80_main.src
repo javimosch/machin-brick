@@ -71,6 +71,21 @@ func main() {
         exit(0)
     }
 
+    // ── the narrated battle ──────────────────────────────────────────────
+    if gon(argv, "--trace") == 1 {
+        println(bt.name + " vs " + fo.name + ":")
+        wn, secs := sim_verbose(bt, fo, parse_int(gflag(argv, "--seed", "3")),
+                                parse_float(gflag(argv, "--maxt", "90")),
+                                1, parse_int(gflag(argv, "--dump", "0")), 1)
+        w := "a draw"
+        if wn == 0 { w = "yours wins" }
+        if wn == 1 { w = "theirs wins" }
+        if wn == 2 { w = "mutual wreck" }
+        if wn == 0 - 2 { w = "STOPPED — see above" }
+        println("  " + w + " at " + fnum(secs, 5) + " s")
+        exit(0)
+    }
+
     // ── the headless battle ──────────────────────────────────────────────
     if gflag(argv, "--sim", "") != "" {
         n := parse_int(gflag(argv, "--sim", "9"))
@@ -230,16 +245,16 @@ func main() {
             }
             if paused == 0 { if over == "" {
                 clock = clock + dt
-                wa, wanta, ax, az := think(fa, fb, dt)
-                wb, wantb, bx, bz := think(fb, fa, dt)
+                wa, wanta, ax, az, arev := think(fa, fb, dt)
+                wb, wantb, bx, bz, brev := think(fb, fa, dt)
                 fa = wa
                 fb = wb
                 // THE GUNS TRACK, THE HULL WALKS. Two bearings, and the fight
                 // stopped being two machines circling each other for ever.
                 fa.p = pose_aim(fa.p, fa.sp, fb.p.x, fb.p.z, dt)
                 fb.p = pose_aim(fb.p, fb.sp, fa.p.x, fa.p.z, dt)
-                fa.p = pose_step(fa.p, fa.sp, dt, wanta, ax, az)
-                fb.p = pose_step(fb.p, fb.sp, dt, wantb, bx, bz)
+                fa.p = pose_step(fa.p, fa.sp, dt, wanta, ax, az, arev)
+                fb.p = pose_step(fb.p, fb.sp, dt, wantb, bx, bz, brev)
                 fa, fb, bolts = fire_step(fa, fb, bolts, dt, frame)
                 fb, fa, bolts = fire_step(fb, fa, bolts, dt, frame + 7)
                 bolts = bolts_age(bolts, dt)
